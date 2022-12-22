@@ -1167,6 +1167,8 @@ public class ConnectivityManager {
                 return "PROXY";
             case TYPE_VPN:
                 return "VPN";
+            case TYPE_TEST:
+                return "TEST";
             default:
                 return Integer.toString(type);
         }
@@ -4078,7 +4080,7 @@ public class ConnectivityManager {
         }
     }
 
-    private class CallbackHandler extends Handler {
+    private static class CallbackHandler extends Handler {
         private static final String TAG = "ConnectivityManager.CallbackHandler";
         private static final boolean DBG = false;
 
@@ -4093,7 +4095,10 @@ public class ConnectivityManager {
         @Override
         public void handleMessage(Message message) {
             if (message.what == EXPIRE_LEGACY_REQUEST) {
-                expireRequest((NetworkCapabilities) message.obj, message.arg1);
+                // the sInstance can't be null because to send this message a ConnectivityManager
+                // instance must have been created prior to creating the thread on which this
+                // Handler is running.
+                sInstance.expireRequest((NetworkCapabilities) message.obj, message.arg1);
                 return;
             }
 
@@ -4784,7 +4789,8 @@ public class ConnectivityManager {
     @SuppressLint({"ExecutorRegistration", "PairedRegistration"})
     @RequiresPermission(anyOf = {
             NetworkStack.PERMISSION_MAINLINE_NETWORK_STACK,
-            android.Manifest.permission.NETWORK_SETTINGS})
+            android.Manifest.permission.NETWORK_SETTINGS,
+            android.Manifest.permission.CONNECTIVITY_USE_RESTRICTED_NETWORKS})
     public void registerSystemDefaultNetworkCallback(@NonNull NetworkCallback networkCallback,
             @NonNull Handler handler) {
         CallbackHandler cbHandler = new CallbackHandler(handler);

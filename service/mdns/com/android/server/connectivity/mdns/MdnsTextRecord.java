@@ -16,7 +16,10 @@
 
 package com.android.server.connectivity.mdns;
 
+import android.annotation.Nullable;
+
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.server.connectivity.mdns.MdnsServiceInfo.TextEntry;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -24,12 +27,10 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
-/** An mDNS "TXT" record, which contains a list of text strings. */
-// TODO(b/242631897): Resolve nullness suppression.
-@SuppressWarnings("nullness")
+/** An mDNS "TXT" record, which contains a list of {@link TextEntry}. */
 @VisibleForTesting
 public class MdnsTextRecord extends MdnsRecord {
-    private List<String> strings;
+    private List<TextEntry> entries;
 
     public MdnsTextRecord(String[] name, MdnsPacketReader reader) throws IOException {
         super(name, TYPE_TXT, reader);
@@ -37,22 +38,34 @@ public class MdnsTextRecord extends MdnsRecord {
 
     /** Returns the list of strings. */
     public List<String> getStrings() {
-        return Collections.unmodifiableList(strings);
+        final List<String> list = new ArrayList<>(entries.size());
+        for (TextEntry entry : entries) {
+            list.add(entry.toString());
+        }
+        return Collections.unmodifiableList(list);
+    }
+
+    /** Returns the list of TXT key-value pairs. */
+    public List<TextEntry> getEntries() {
+        return Collections.unmodifiableList(entries);
     }
 
     @Override
     protected void readData(MdnsPacketReader reader) throws IOException {
-        strings = new ArrayList<>();
+        entries = new ArrayList<>();
         while (reader.getRemaining() > 0) {
-            strings.add(reader.readString());
+            TextEntry entry = reader.readTextEntry();
+            if (entry != null) {
+                entries.add(entry);
+            }
         }
     }
 
     @Override
     protected void writeData(MdnsPacketWriter writer) throws IOException {
-        if (strings != null) {
-            for (String string : strings) {
-                writer.writeString(string);
+        if (entries != null) {
+            for (TextEntry entry : entries) {
+                writer.writeTextEntry(entry);
             }
         }
     }
@@ -61,9 +74,9 @@ public class MdnsTextRecord extends MdnsRecord {
     public String toString() {
         StringBuilder sb = new StringBuilder();
         sb.append("TXT: {");
-        if (strings != null) {
-            for (String string : strings) {
-                sb.append(' ').append(string);
+        if (entries != null) {
+            for (TextEntry entry : entries) {
+                sb.append(' ').append(entry);
             }
         }
         sb.append("}");
@@ -73,11 +86,11 @@ public class MdnsTextRecord extends MdnsRecord {
 
     @Override
     public int hashCode() {
-        return (super.hashCode() * 31) + Objects.hash(strings);
+        return (super.hashCode() * 31) + Objects.hash(entries);
     }
 
     @Override
-    public boolean equals(Object other) {
+    public boolean equals(@Nullable Object other) {
         if (this == other) {
             return true;
         }
@@ -85,6 +98,6 @@ public class MdnsTextRecord extends MdnsRecord {
             return false;
         }
 
-        return super.equals(other) && Objects.equals(strings, ((MdnsTextRecord) other).strings);
+        return super.equals(other) && Objects.equals(entries, ((MdnsTextRecord) other).entries);
     }
 }

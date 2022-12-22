@@ -16,21 +16,25 @@
 
 package com.android.server.nearby.fastpair.halfsheet;
 
-import static com.android.server.nearby.fastpair.Constant.DEVICE_PAIRING_FRAGMENT_TYPE;
-import static com.android.server.nearby.fastpair.Constant.EXTRA_BINDER;
-import static com.android.server.nearby.fastpair.Constant.EXTRA_BUNDLE;
-import static com.android.server.nearby.fastpair.Constant.EXTRA_HALF_SHEET_INFO;
-import static com.android.server.nearby.fastpair.Constant.EXTRA_HALF_SHEET_TYPE;
-import static com.android.server.nearby.fastpair.FastPairManager.ACTION_RESOURCES_APK;
+import static com.android.nearby.halfsheet.constants.Constant.DEVICE_PAIRING_FRAGMENT_TYPE;
+import static com.android.nearby.halfsheet.constants.Constant.EXTRA_BINDER;
+import static com.android.nearby.halfsheet.constants.Constant.EXTRA_BUNDLE;
+import static com.android.nearby.halfsheet.constants.Constant.EXTRA_HALF_SHEET_CONTENT;
+import static com.android.nearby.halfsheet.constants.Constant.EXTRA_HALF_SHEET_INFO;
+import static com.android.nearby.halfsheet.constants.Constant.EXTRA_HALF_SHEET_TYPE;
+import static com.android.nearby.halfsheet.constants.Constant.FAST_PAIR_HALF_SHEET_HELP_URL;
+import static com.android.nearby.halfsheet.constants.Constant.RESULT_FAIL;
+
+import static java.util.concurrent.TimeUnit.SECONDS;
 
 import android.annotation.UiThread;
+import android.app.ActivityManager;
 import android.app.KeyguardManager;
 import android.bluetooth.BluetoothDevice;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.content.pm.ResolveInfo;
 import android.nearby.FastPairDevice;
 import android.nearby.FastPairStatusCallback;
 import android.nearby.PairStatusMetadata;
@@ -38,24 +42,25 @@ import android.os.Bundle;
 import android.os.UserHandle;
 import android.util.Log;
 import android.util.LruCache;
+import android.widget.Toast;
 
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.nearby.halfsheet.R;
 import com.android.server.nearby.common.eventloop.Annotations;
 import com.android.server.nearby.common.eventloop.EventLoop;
 import com.android.server.nearby.common.eventloop.NamedRunnable;
 import com.android.server.nearby.common.locator.Locator;
 import com.android.server.nearby.common.locator.LocatorContextWrapper;
 import com.android.server.nearby.fastpair.FastPairController;
+import com.android.server.nearby.fastpair.PackageUtils;
 import com.android.server.nearby.fastpair.blocklist.Blocklist;
 import com.android.server.nearby.fastpair.cache.DiscoveryItem;
-import com.android.server.nearby.util.Environment;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Collectors;
 
 import service.proto.Cache;
 
@@ -67,16 +72,21 @@ public class FastPairHalfSheetManager {
     private static final String HALF_SHEET_CLASS_NAME =
             "com.android.nearby.halfsheet.HalfSheetActivity";
     private static final String TAG = "FPHalfSheetManager";
-    public static final String ACTION_HALF_SHEET_STATUS_CHANGE =
-            "com.android.nearby.halfsheet.ACTION_HALF_SHEET_STATUS_CHANGE";
     public static final String FINISHED_STATE = "FINISHED_STATE";
+    @VisibleForTesting static final String DISMISS_HALFSHEET_RUNNABLE_NAME = "DismissHalfSheet";
+    @VisibleForTesting static final String SHOW_TOAST_RUNNABLE_NAME = "SuccessPairingToast";
+
     // The timeout to ban half sheet after user trigger the ban logic odd number of time: 5 mins
     private static final int DURATION_RESURFACE_HALFSHEET_FIRST_DISMISS_MILLI_SECONDS = 300000;
-    @VisibleForTesting static final String DISMISS_HALFSHEET_RUNNABLE_NAME = "DismissHalfSheet";
+    // Number of seconds half sheet will show after the advertisement is no longer seen.
+    private static final int HALF_SHEET_TIME_OUT_SECONDS = 12;
 
     static final int HALFSHEET_ID_SEED = "new_fast_pair_half_sheet".hashCode();
 
     private String mHalfSheetApkPkgName;
+    private boolean mIsHalfSheetForeground = false;
+    private boolean mIsActivePairing = false;
+    private Cache.ScanFastPairStoreItem mCurrentScanFastPairStoreItem = null;
     private final LocatorContextWrapper mLocatorContextWrapper;
     private final AtomicInteger mNotificationIds = new AtomicInteger(HALFSHEET_ID_SEED);
     private FastPairHalfSheetBlocklist mHalfSheetBlocklist;
@@ -108,7 +118,7 @@ public class FastPairHalfSheetManager {
     }
 
     @VisibleForTesting
-    FastPairHalfSheetManager(LocatorContextWrapper locatorContextWrapper) {
+    public FastPairHalfSheetManager(LocatorContextWrapper locatorContextWrapper) {
         mLocatorContextWrapper = locatorContextWrapper;
         mFastPairUiService = new FastPairUiServiceImpl();
         mHalfSheetBlocklist = new FastPairHalfSheetBlocklist();
@@ -132,9 +142,25 @@ public class FastPairHalfSheetManager {
         }
         int halfSheetId = mModelIdMap.get(modelId);
 
-        if (!allowedToShowShowHalfSheet(halfSheetId)) {
+        if (!allowedToShowHalfSheet(halfSheetId)) {
             Log.d(TAG, "Not allow to show initial Half sheet");
             return;
+        }
+
+        // If currently half sheet UI is in the foreground,
+        // DO NOT request start-activity to avoid unnecessary memory usage
+        if (mIsHalfSheetForeground) {
+            updateForegroundHalfSheet(scanFastPairStoreItem);
+            return;
+        } else {
+            // If the half sheet is not in foreground but the system is still pairing
+            // with the same device, mark as duplicate request and skip.
+            if (mCurrentScanFastPairStoreItem != null && mIsActivePairing
+                    && mCurrentScanFastPairStoreItem.getAddress().toLowerCase(Locale.ROOT)
+                    .equals(scanFastPairStoreItem.getAddress().toLowerCase(Locale.ROOT))) {
+                Log.d(TAG, "Same device is pairing.");
+                return;
+            }
         }
 
         try {
@@ -164,29 +190,72 @@ public class FastPairHalfSheetManager {
             Log.e(TAG, "Can't resolve package that contains half sheet");
         }
         Log.d(TAG, "show initial half sheet.");
-        // TODO: Half Sheet will fade away when the headphone does not broadcast
+        mCurrentScanFastPairStoreItem = scanFastPairStoreItem;
+        mIsHalfSheetForeground = true;
+        enableAutoDismiss(scanFastPairStoreItem.getAddress(), HALF_SHEET_TIME_OUT_SECONDS);
     }
 
     /**
-     * Shows pairing fail half sheet.
+     * Auto dismiss half sheet after timeout
      */
-    public void showPairingFailed() {
-        FastPairStatusCallback pairStatusCallback = mFastPairUiService.getPairStatusCallback();
-        if (pairStatusCallback != null) {
-            Log.v(TAG, "showPairingFailed: pairStatusCallback not NULL");
-            pairStatusCallback.onPairUpdate(new FastPairDevice.Builder().build(),
-                    new PairStatusMetadata(PairStatusMetadata.Status.FAIL));
-        } else {
-            Log.w(TAG, "FastPairHalfSheetManager failed to show success half sheet because "
-                    + "the pairStatusCallback is null");
+    @VisibleForTesting
+    void enableAutoDismiss(String address, long timeoutDuration) {
+        if (mDismissRunnable == null
+                || !mDismissRunnable.name.equals(DISMISS_HALFSHEET_RUNNABLE_NAME)) {
+            mDismissRunnable =
+                new NamedRunnable(DISMISS_HALFSHEET_RUNNABLE_NAME) {
+                    @Override
+                    public void run() {
+                        Log.d(TAG, "Dismiss the half sheet after "
+                                + timeoutDuration + " seconds");
+                        // BMW car kit will advertise even after pairing start,
+                        // to avoid the half sheet be dismissed during active pairing,
+                        // If the half sheet is in the pairing state, disable the auto dismiss.
+                        // See b/182396106
+                        if (mIsActivePairing) {
+                            return;
+                        }
+                        mIsHalfSheetForeground = false;
+                        FastPairStatusCallback pairStatusCallback =
+                                mFastPairUiService.getPairStatusCallback();
+                        if (pairStatusCallback != null) {
+                            pairStatusCallback.onPairUpdate(new FastPairDevice.Builder()
+                                            .setBluetoothAddress(address).build(),
+                                    new PairStatusMetadata(PairStatusMetadata.Status.DISMISS));
+                        } else {
+                            Log.w(TAG, "pairStatusCallback is null,"
+                                    + " failed to enable auto dismiss ");
+                        }
+                    }
+                };
         }
+        if (Locator.get(mLocatorContextWrapper, EventLoop.class).isPosted(mDismissRunnable)) {
+            disableDismissRunnable();
+        }
+        Locator.get(mLocatorContextWrapper, EventLoop.class)
+            .postRunnableDelayed(mDismissRunnable, SECONDS.toMillis(timeoutDuration));
     }
 
-    /**
-     * Get the half sheet status whether it is foreground or dismissed
-     */
-    public boolean getHalfSheetForegroundState() {
-        return true;
+    private void updateForegroundHalfSheet(Cache.ScanFastPairStoreItem scanFastPairStoreItem) {
+        if (mCurrentScanFastPairStoreItem == null) {
+            return;
+        }
+        if (mCurrentScanFastPairStoreItem.getAddress().toLowerCase(Locale.ROOT)
+                .equals(scanFastPairStoreItem.getAddress().toLowerCase(Locale.ROOT))) {
+            // If current address is the same, reset the timeout.
+            Log.d(TAG, "same Address device, reset the auto dismiss timeout");
+            enableAutoDismiss(scanFastPairStoreItem.getAddress(), HALF_SHEET_TIME_OUT_SECONDS);
+        } else {
+            // If current address is different, not reset timeout
+            // wait for half sheet auto dismiss or manually dismiss to start new pair.
+            if (mCurrentScanFastPairStoreItem.getModelId().toLowerCase(Locale.ROOT)
+                    .equals(scanFastPairStoreItem.getModelId().toLowerCase(Locale.ROOT))) {
+                Log.d(TAG, "same model id device is also nearby");
+            }
+            Log.d(TAG, "showInitialHalfsheet: address changed, from "
+                    +  mCurrentScanFastPairStoreItem.getAddress()
+                    + " to " + scanFastPairStoreItem.getAddress());
+        }
     }
 
     /**
@@ -204,16 +273,95 @@ public class FastPairHalfSheetManager {
 
     /**
      * Shows pairing success info.
+     * If the half sheet is not shown, show toast to remind user.
      */
     public void showPairingSuccessHalfSheet(String address) {
-        FastPairStatusCallback pairStatusCallback = mFastPairUiService.getPairStatusCallback();
-        if (pairStatusCallback != null) {
+        resetPairingStateDisableAutoDismiss();
+        if (mIsHalfSheetForeground) {
+            FastPairStatusCallback pairStatusCallback = mFastPairUiService.getPairStatusCallback();
+            if (pairStatusCallback == null) {
+                Log.w(TAG, "FastPairHalfSheetManager failed to show success half sheet because "
+                        + "the pairStatusCallback is null");
+                return;
+            }
+            Log.d(TAG, "showPairingSuccess: pairStatusCallback not NULL");
             pairStatusCallback.onPairUpdate(
                     new FastPairDevice.Builder().setBluetoothAddress(address).build(),
                     new PairStatusMetadata(PairStatusMetadata.Status.SUCCESS));
         } else {
-            Log.w(TAG, "FastPairHalfSheetManager failed to show success half sheet because "
-                    + "the pairStatusCallback is null");
+            Locator.get(mLocatorContextWrapper, EventLoop.class)
+                    .postRunnable(
+                            new NamedRunnable(SHOW_TOAST_RUNNABLE_NAME) {
+                                @Override
+                                public void run() {
+                                    try {
+                                        Toast.makeText(mLocatorContextWrapper,
+                                                mLocatorContextWrapper
+                                                        .getPackageManager()
+                                                        .getResourcesForApplication(
+                                                                getHalfSheetApkPkgName())
+                                                        .getString(R.string.fast_pair_device_ready),
+                                                Toast.LENGTH_LONG).show();
+                                    } catch (PackageManager.NameNotFoundException e) {
+                                        Log.d(TAG, "showPairingSuccess fail:"
+                                                + " package name cannot be found ");
+                                        e.printStackTrace();
+                                    }
+                                }
+                            });
+        }
+    }
+
+    /**
+     * Shows pairing fail half sheet.
+     * If the half sheet is not shown, create a new half sheet to help user go to Setting
+     * to manually pair with the device.
+     */
+    public void showPairingFailed() {
+        resetPairingStateDisableAutoDismiss();
+        if (mCurrentScanFastPairStoreItem == null) {
+            return;
+        }
+        if (mIsHalfSheetForeground) {
+            FastPairStatusCallback pairStatusCallback = mFastPairUiService.getPairStatusCallback();
+            if (pairStatusCallback != null) {
+                Log.v(TAG, "showPairingFailed: pairStatusCallback not NULL");
+                pairStatusCallback.onPairUpdate(
+                        new FastPairDevice.Builder()
+                                .setBluetoothAddress(mCurrentScanFastPairStoreItem.getAddress())
+                                .build(),
+                        new PairStatusMetadata(PairStatusMetadata.Status.FAIL));
+            } else {
+                Log.w(TAG, "FastPairHalfSheetManager failed to show fail half sheet because "
+                        + "the pairStatusCallback is null");
+            }
+        } else {
+            String packageName = getHalfSheetApkPkgName();
+            if (packageName == null) {
+                Log.e(TAG, "package name is null");
+                return;
+            }
+            Bundle bundle = new Bundle();
+            bundle.putBinder(EXTRA_BINDER, mFastPairUiService);
+            mLocatorContextWrapper
+                    .startActivityAsUser(new Intent(ACTIVITY_INTENT_ACTION)
+                                    .putExtra(EXTRA_HALF_SHEET_INFO,
+                                            mCurrentScanFastPairStoreItem.toByteArray())
+                                    .putExtra(EXTRA_HALF_SHEET_TYPE,
+                                            DEVICE_PAIRING_FRAGMENT_TYPE)
+                                    .putExtra(EXTRA_HALF_SHEET_CONTENT, RESULT_FAIL)
+                                    .putExtra(EXTRA_BUNDLE, bundle)
+                                    .setComponent(new ComponentName(packageName,
+                                            HALF_SHEET_CLASS_NAME)),
+                            UserHandle.CURRENT);
+            Log.d(TAG, "Starts a new half sheet to showPairingFailed");
+            String modelId = mCurrentScanFastPairStoreItem.getModelId().toLowerCase(Locale.ROOT);
+            if (modelId == null || mModelIdMap.get(modelId) == null) {
+                Log.d(TAG, "info not enough");
+                return;
+            }
+            int halfSheetId = mModelIdMap.get(modelId);
+            mHalfSheetBlocklist.updateState(halfSheetId, Blocklist.BlocklistState.ACTIVE);
         }
     }
 
@@ -241,6 +389,7 @@ public class FastPairHalfSheetManager {
     @Annotations.EventThread
     public void dismiss(String modelId) {
         Log.d(TAG, "HalfSheetManager report dismiss device modelId: " + modelId);
+        mIsHalfSheetForeground = false;
         Integer halfSheetId = mModelIdMap.get(modelId);
         if (mDismissRunnable != null
                 && Locator.get(mLocatorContextWrapper, EventLoop.class)
@@ -285,6 +434,15 @@ public class FastPairHalfSheetManager {
         mHalfSheetBlocklist.resetBlockState(halfSheetId);
     }
 
+    // Invokes this method to reset some states when showing the pairing result.
+    private void resetPairingStateDisableAutoDismiss() {
+        mIsActivePairing = false;
+        if (mDismissRunnable != null && Locator.get(mLocatorContextWrapper, EventLoop.class)
+                .isPosted(mDismissRunnable)) {
+            disableDismissRunnable();
+        }
+    }
+
     /**
      * When the device pairing finished should remove the suppression for the model id
      * so the user canntry twice if the user want to.
@@ -308,9 +466,11 @@ public class FastPairHalfSheetManager {
      * Notifies manager the pairing has finished.
      */
     public void notifyPairingProcessDone(boolean success, String address, DiscoveryItem item) {
+        mCurrentScanFastPairStoreItem = null;
+        mIsHalfSheetForeground = false;
     }
 
-    private boolean allowedToShowShowHalfSheet(int halfSheetId) {
+    private boolean allowedToShowHalfSheet(int halfSheetId) {
         // Half Sheet will not show when the screen is locked so disable half sheet
         KeyguardManager keyguardManager =
                 mLocatorContextWrapper.getSystemService(KeyguardManager.class);
@@ -331,11 +491,68 @@ public class FastPairHalfSheetManager {
             Log.d(TAG, "id: " + halfSheetId + " is blocked");
             return false;
         }
-        return true;
+        return  !isHelpPageForeground();
     }
+
+    /**
+    * Checks if the user already open the info page, return true to suppress half sheet.
+    * ActivityManager#getRunningTasks to get the most recent task and check the baseIntent's
+    * url to see if we should suppress half sheet.
+    */
+    private boolean isHelpPageForeground() {
+        ActivityManager activityManager =
+                mLocatorContextWrapper.getSystemService(ActivityManager.class);
+        if (activityManager == null) {
+            Log.d(TAG, "ActivityManager is null");
+            return false;
+        }
+        try {
+            List<ActivityManager.RunningTaskInfo> taskInfos = activityManager.getRunningTasks(1);
+            if (taskInfos.isEmpty()) {
+                Log.d(TAG, "Empty running tasks");
+                return false;
+            }
+            String url = taskInfos.get(0).baseIntent.getDataString();
+            Log.d(TAG, "Info page url:" + url);
+            if (FAST_PAIR_HALF_SHEET_HELP_URL.equals(url)) {
+                return true;
+            }
+        } catch (SecurityException e) {
+            Log.d(TAG, "Unable to get running tasks");
+        }
+        return false;
+    }
+
+    /** Report actively pairing when the Fast Pair starts. */
+    public void reportActivelyPairing() {
+        mIsActivePairing = true;
+    }
+
 
     private Integer createNewHalfSheetId() {
         return mNotificationIds.getAndIncrement();
+    }
+
+    /** Gets the half sheet status whether it is foreground or dismissed */
+    public boolean getHalfSheetForeground() {
+        return mIsHalfSheetForeground;
+    }
+
+    /** Sets whether the half sheet is at the foreground or not. */
+    public void setHalfSheetForeground(boolean state) {
+        mIsHalfSheetForeground = state;
+    }
+
+    /** Returns whether the fast pair is actively pairing . */
+    @VisibleForTesting
+    public boolean isActivePairing() {
+        return mIsActivePairing;
+    }
+
+    /** Sets fast pair to be active pairing or not, used for testing. */
+    @VisibleForTesting
+    public void setIsActivePairing(boolean isActivePairing) {
+        mIsActivePairing = isActivePairing;
     }
 
     /**
@@ -343,39 +560,12 @@ public class FastPairHalfSheetManager {
      * getHalfSheetApkPkgName may invoke PackageManager multiple times and it does not have
      * race condition check. Since there is no lock for mHalfSheetApkPkgName.
      */
-    String getHalfSheetApkPkgName() {
+    private String getHalfSheetApkPkgName() {
         if (mHalfSheetApkPkgName != null) {
             return mHalfSheetApkPkgName;
         }
-        List<ResolveInfo> resolveInfos = mLocatorContextWrapper
-                .getPackageManager().queryIntentActivities(
-                        new Intent(ACTION_RESOURCES_APK),
-                        PackageManager.MATCH_SYSTEM_ONLY);
-
-        // remove apps that don't live in the nearby apex
-        resolveInfos.removeIf(info ->
-                !Environment.isAppInNearbyApex(info.activityInfo.applicationInfo));
-
-        if (resolveInfos.isEmpty()) {
-            // Resource APK not loaded yet, print a stack trace to see where this is called from
-            Log.e("FastPairManager", "Attempted to fetch resources before halfsheet "
-                            + " APK is installed or package manager can't resolve correctly!",
-                    new IllegalStateException());
-            return null;
-        }
-
-        if (resolveInfos.size() > 1) {
-            // multiple apps found, log a warning, but continue
-            Log.w("FastPairManager", "Found > 1 APK that can resolve halfsheet APK intent: "
-                    + resolveInfos.stream()
-                    .map(info -> info.activityInfo.applicationInfo.packageName)
-                    .collect(Collectors.joining(", ")));
-        }
-
-        // Assume the first ResolveInfo is the one we're looking for
-        ResolveInfo info = resolveInfos.get(0);
-        mHalfSheetApkPkgName = info.activityInfo.applicationInfo.packageName;
-        Log.i("FastPairManager", "Found halfsheet APK at: " + mHalfSheetApkPkgName);
+        mHalfSheetApkPkgName = PackageUtils.getHalfSheetApkPkgName(mLocatorContextWrapper);
+        Log.v(TAG, "Found halfsheet APK at: " + mHalfSheetApkPkgName);
         return mHalfSheetApkPkgName;
     }
 }

@@ -16,9 +16,11 @@
 
 package com.android.server.nearby.fastpair;
 
-import static com.android.server.nearby.common.bluetooth.fastpair.FastPairConstants.EXTRA_MODEL_ID;
-import static com.android.server.nearby.fastpair.Constant.ACTION_FAST_PAIR_HALF_SHEET_BAN_STATE_RESET;
-import static com.android.server.nearby.fastpair.Constant.ACTION_FAST_PAIR_HALF_SHEET_CANCEL;
+import static com.android.nearby.halfsheet.constants.Constant.ACTION_FAST_PAIR_HALF_SHEET_BAN_STATE_RESET;
+import static com.android.nearby.halfsheet.constants.Constant.ACTION_FAST_PAIR_HALF_SHEET_CANCEL;
+import static com.android.nearby.halfsheet.constants.Constant.ACTION_HALF_SHEET_FOREGROUND_STATE;
+import static com.android.nearby.halfsheet.constants.Constant.EXTRA_HALF_SHEET_FOREGROUND;
+import static com.android.nearby.halfsheet.constants.FastPairConstants.EXTRA_MODEL_ID;
 import static com.android.server.nearby.fastpair.Constant.TAG;
 
 import android.annotation.Nullable;
@@ -92,7 +94,6 @@ public class FastPairManager {
 
     /** A notification ID which should be dismissed */
     public static final String EXTRA_NOTIFICATION_ID = ACTION_PREFIX + "EXTRA_NOTIFICATION_ID";
-    public static final String ACTION_RESOURCES_APK = "android.nearby.SHOW_HALFSHEET";
 
     private static Executor sFastPairExecutor;
 
@@ -119,6 +120,12 @@ public class FastPairManager {
                 case BluetoothDevice.ACTION_BOND_STATE_CHANGED:
                     Log.d(TAG, "onReceive: ACTION_BOND_STATE_CHANGED");
                     processBluetoothConnectionEvent(intent);
+                    break;
+                case ACTION_HALF_SHEET_FOREGROUND_STATE:
+                    boolean state = intent.getBooleanExtra(EXTRA_HALF_SHEET_FOREGROUND, false);
+                    Log.d(TAG, "halfsheet report foreground state:  " + state);
+                    Locator.get(mLocatorContextWrapper, FastPairHalfSheetManager.class)
+                            .setHalfSheetForeground(state);
                     break;
                 case ACTION_FAST_PAIR_HALF_SHEET_BAN_STATE_RESET:
                     Log.d(TAG, "onReceive: ACTION_FAST_PAIR_HALF_SHEET_BAN_STATE_RESET");
@@ -186,6 +193,7 @@ public class FastPairManager {
         mIntentFilter.addAction(Intent.ACTION_BOOT_COMPLETED);
         mIntentFilter.addAction(ACTION_FAST_PAIR_HALF_SHEET_CANCEL);
         mIntentFilter.addAction(ACTION_FAST_PAIR_HALF_SHEET_BAN_STATE_RESET);
+        mIntentFilter.addAction(ACTION_HALF_SHEET_FOREGROUND_STATE);
 
         mLocatorContextWrapper.getContext()
                 .registerReceiver(mScreenBroadcastReceiver, mIntentFilter);
