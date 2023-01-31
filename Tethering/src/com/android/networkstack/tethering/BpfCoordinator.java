@@ -74,7 +74,7 @@ import com.android.net.module.util.ip.ConntrackMonitor;
 import com.android.net.module.util.ip.ConntrackMonitor.ConntrackEventConsumer;
 import com.android.net.module.util.netlink.ConntrackMessage;
 import com.android.net.module.util.netlink.NetlinkConstants;
-import com.android.net.module.util.netlink.NetlinkSocket;
+import com.android.net.module.util.netlink.NetlinkUtils;
 import com.android.networkstack.tethering.apishim.common.BpfCoordinatorShim;
 import com.android.networkstack.tethering.util.TetheringUtils.ForwardedStats;
 
@@ -126,7 +126,7 @@ public class BpfCoordinator {
     private static final String DUMPSYS_RAWMAP_ARG_STATS = "--stats";
     private static final String DUMPSYS_RAWMAP_ARG_UPSTREAM4 = "--upstream4";
 
-    /** The names of all the BPF counters defined in bpf_tethering.h. */
+    /** The names of all the BPF counters defined in offload.h. */
     public static final String[] sBpfCounterNames = getBpfCounterNames();
 
     private static String makeMapPath(String which) {
@@ -2075,7 +2075,7 @@ public class BpfCoordinator {
         final byte[] msg = ConntrackMessage.newIPv4TimeoutUpdateRequest(
                 proto, src4, (int) srcPort, dst4, (int) dstPort, timeoutSec);
         try {
-            NetlinkSocket.sendOneShotKernelMessage(OsConstants.NETLINK_NETFILTER, msg);
+            NetlinkUtils.sendOneShotKernelMessage(OsConstants.NETLINK_NETFILTER, msg);
         } catch (ErrnoException e) {
             // Lower the log level for the entry not existing. The conntrack entry may have been
             // deleted and not handled by the conntrack event monitor yet. In other words, the
