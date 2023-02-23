@@ -269,6 +269,8 @@ import com.android.networkstack.apishim.ConstantsShim;
 import com.android.networkstack.apishim.common.BroadcastOptionsShim;
 import com.android.networkstack.apishim.common.UnsupportedApiLevelException;
 import com.android.server.connectivity.AutodestructReference;
+import com.android.server.connectivity.AutomaticOnOffKeepaliveTracker;
+import com.android.server.connectivity.AutomaticOnOffKeepaliveTracker.AutomaticOnOffKeepalive;
 import com.android.server.connectivity.CarrierPrivilegeAuthenticator;
 import com.android.server.connectivity.ClatCoordinator;
 import com.android.server.connectivity.ConnectivityFlags;
@@ -407,8 +409,7 @@ public class ConnectivityService extends IConnectivityManager.Stub
 
     private final MockableSystemProperties mSystemProperties;
 
-    @VisibleForTesting
-    protected final PermissionMonitor mPermissionMonitor;
+    private final PermissionMonitor mPermissionMonitor;
 
     @VisibleForTesting
     final RequestInfoPerUidCounter mNetworkRequestCounter;
@@ -843,7 +844,7 @@ public class ConnectivityService extends IConnectivityManager.Stub
 
     private final LocationPermissionChecker mLocationPermissionChecker;
 
-    private final KeepaliveTracker mKeepaliveTracker;
+    private final AutomaticOnOffKeepaliveTracker mKeepaliveTracker;
     private final QosCallbackTracker mQosCallbackTracker;
     private final NetworkNotificationManager mNotifier;
     private final LingerMonitor mLingerMonitor;
@@ -1565,7 +1566,7 @@ public class ConnectivityService extends IConnectivityManager.Stub
         mSettingsObserver = new SettingsObserver(mContext, mHandler);
         registerSettingsCallbacks();
 
-        mKeepaliveTracker = new KeepaliveTracker(mContext, mHandler);
+        mKeepaliveTracker = new AutomaticOnOffKeepaliveTracker(mContext, mHandler);
         mNotifier = new NetworkNotificationManager(mContext, mTelephonyManager);
         mQosCallbackTracker = new QosCallbackTracker(mHandler, mNetworkRequestCounter);
 
@@ -3081,6 +3082,7 @@ public class ConnectivityService extends IConnectivityManager.Stub
             optsShim.setDeliveryGroupPolicy(ConstantsShim.DELIVERY_GROUP_POLICY_MOST_RECENT);
             optsShim.setDeliveryGroupMatchingKey(ConnectivityManager.CONNECTIVITY_ACTION,
                     createDeliveryGroupKeyForConnectivityAction(info));
+            optsShim.setDeferUntilActive(true);
         } catch (UnsupportedApiLevelException e) {
             Log.wtf(TAG, "Using unsupported API" + e);
         }
@@ -5544,9 +5546,40 @@ public class ConnectivityService extends IConnectivityManager.Stub
                     mKeepaliveTracker.handleStartKeepalive(msg);
                     break;
                 }
+                case NetworkAgent.CMD_MONITOR_AUTOMATIC_KEEPALIVE: {
+                    final AutomaticOnOffKeepalive ki = (AutomaticOnOffKeepalive) msg.obj;
+
+                    final Network network = ki.getNetwork();
+                    boolean networkFound = false;
+                    final ArrayList<NetworkAgentInfo> vpnsRunningOnThisNetwork = new ArrayList<>();
+                    for (NetworkAgentInfo n : mNetworkAgentInfos) {
+                        if (n.network.equals(network)) networkFound = true;
+                        if (n.isVPN() && n.everConnected() && hasUnderlyingNetwork(n, network)) {
+                            vpnsRunningOnThisNetwork.add(n);
+                        }
+                    }
+
+                    // If the network no longer exists, then the keepalive should have been
+                    // cleaned up already. There is no point trying to resume keepalives.
+                    if (!networkFound) return;
+
+                    if (!vpnsRunningOnThisNetwork.isEmpty()) {
+                        mKeepaliveTracker.handleMonitorAutomaticKeepalive(ki,
+                                // TODO: check all the VPNs running on top of this network
+                                vpnsRunningOnThisNetwork.get(0).network.netId);
+                    } else {
+                        // If no VPN, then make sure the keepalive is running.
+                        mKeepaliveTracker.handleMaybeResumeKeepalive(ki);
+                    }
+                    break;
+                }
                 // Sent by KeepaliveTracker to process an app request on the state machine thread.
                 case NetworkAgent.CMD_STOP_SOCKET_KEEPALIVE: {
                     NetworkAgentInfo nai = getNetworkAgentInfoForNetwork((Network) msg.obj);
+                    if (nai == null) {
+                        Log.e(TAG, "Attempt to stop keepalive on nonexistent network");
+                        return;
+                    }
                     int slot = msg.arg1;
                     int reason = msg.arg2;
                     mKeepaliveTracker.handleStopKeepalive(nai, slot, reason);
@@ -6217,9 +6250,7 @@ public class ConnectivityService extends IConnectivityManager.Stub
         if (mOemNetworkPreferences.getNetworkPreferences().size() > 0) {
             handleSetOemNetworkPreference(mOemNetworkPreferences, null);
         }
-        if (!mProfileNetworkPreferences.isEmpty()) {
-            updateProfileAllowedNetworks();
-        }
+        updateProfileAllowedNetworks();
     }
 
     private void onUserRemoved(@NonNull final UserHandle user) {
@@ -9788,20 +9819,23 @@ public class ConnectivityService extends IConnectivityManager.Stub
         enforceKeepalivePermission();
         mKeepaliveTracker.startNattKeepalive(
                 getNetworkAgentInfoForNetwork(network), null /* fd */,
-                intervalSeconds, cb,
-                srcAddr, srcPort, dstAddr, NattSocketKeepalive.NATT_PORT);
+                intervalSeconds, cb, srcAddr, srcPort, dstAddr, NattSocketKeepalive.NATT_PORT,
+                // Keep behavior of the deprecated method as it is. Set automaticOnOffKeepalives to
+                // false because there is no way and no plan to configure automaticOnOffKeepalives
+                // in this deprecated method.
+                false /* automaticOnOffKeepalives */);
     }
 
     @Override
     public void startNattKeepaliveWithFd(Network network, ParcelFileDescriptor pfd, int resourceId,
             int intervalSeconds, ISocketKeepaliveCallback cb, String srcAddr,
-            String dstAddr) {
+            String dstAddr, boolean automaticOnOffKeepalives) {
         try {
             final FileDescriptor fd = pfd.getFileDescriptor();
             mKeepaliveTracker.startNattKeepalive(
                     getNetworkAgentInfoForNetwork(network), fd, resourceId,
                     intervalSeconds, cb,
-                    srcAddr, dstAddr, NattSocketKeepalive.NATT_PORT);
+                    srcAddr, dstAddr, NattSocketKeepalive.NATT_PORT, automaticOnOffKeepalives);
         } finally {
             // FileDescriptors coming from AIDL calls must be manually closed to prevent leaks.
             // startNattKeepalive calls Os.dup(fd) before returning, so we can close immediately.
