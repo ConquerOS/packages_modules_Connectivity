@@ -29,11 +29,13 @@ java_library {
     ],
     libs: [
         "androidx.annotation_annotation",
+        "framework-annotations-lib",
     ],
     sdk_version: "module_current",
 }
 
 // GN: //components/cronet/android:cronet_api_java
+// TODO(danstahr): add the API helpers separately after the main API is checked in and thoroughly reviewed
 filegroup {
     name: "cronet_aml_api_sources",
     srcs: [
@@ -59,18 +61,6 @@ filegroup {
         "components/cronet/android/api/src/android/net/http/UploadDataSink.java",
         "components/cronet/android/api/src/android/net/http/UrlRequest.java",
         "components/cronet/android/api/src/android/net/http/UrlResponseInfo.java",
-        "components/cronet/android/api/src/android/net/http/apihelpers/ByteArrayCallback.java",
-        "components/cronet/android/api/src/android/net/http/apihelpers/ContentTypeParametersParser.java",
-        "components/cronet/android/api/src/android/net/http/apihelpers/HttpResponse.java",
-        "components/cronet/android/api/src/android/net/http/apihelpers/ImplicitFlowControlCallback.java",
-        "components/cronet/android/api/src/android/net/http/apihelpers/InMemoryTransformCallback.java",
-        "components/cronet/android/api/src/android/net/http/apihelpers/JsonCallback.java",
-        "components/cronet/android/api/src/android/net/http/apihelpers/RedirectHandler.java",
-        "components/cronet/android/api/src/android/net/http/apihelpers/RedirectHandlers.java",
-        "components/cronet/android/api/src/android/net/http/apihelpers/RequestCompletionListener.java",
-        "components/cronet/android/api/src/android/net/http/apihelpers/StringCallback.java",
-        "components/cronet/android/api/src/android/net/http/apihelpers/UploadDataProviders.java",
-        "components/cronet/android/api/src/android/net/http/apihelpers/UrlRequestCallbacks.java",
     ],
 }
 
@@ -146,7 +136,7 @@ cc_genrule {
 // GN: //base/allocator/partition_allocator:debugging_buildflags
 cc_genrule {
     name: "cronet_aml_base_allocator_partition_allocator_debugging_buildflags",
-    cmd: "echo '--flags PA_DCHECK_IS_ON=\"true\" PA_EXPENSIVE_DCHECKS_ARE_ON=\"true\" PA_DCHECK_IS_CONFIGURABLE=\"false\"' | " +
+    cmd: "echo '--flags PA_DCHECK_IS_ON=\"false\" PA_EXPENSIVE_DCHECKS_ARE_ON=\"false\" PA_DCHECK_IS_CONFIGURABLE=\"false\"' | " +
          "$(location build/write_buildflag_header.py) --output " +
          "$(out) " +
          "--rulename " +
@@ -269,17 +259,28 @@ cc_library_static {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
         "-DIS_PARTITION_ALLOC_IMPL",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-DPA_PCSCAN_STACK_SUPPORTED",
-        "-D_DEBUG",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-O3",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -292,10 +293,18 @@ cc_library_static {
         "libgtest_prod_headers",
     ],
     cpp_std: "c++17",
+    ldflags: [
+        "-Wl,--as-needed",
+        "-Wl,--gc-sections",
+        "-Wl,--icf=all",
+    ],
     target: {
         android_arm: {
             srcs: [
                 "base/allocator/partition_allocator/starscan/stack/asm/arm/push_registers_asm.cc",
+            ],
+            cflags: [
+                "-fstack-protector",
             ],
         },
         android_arm64: {
@@ -303,7 +312,10 @@ cc_library_static {
                 "base/allocator/partition_allocator/starscan/stack/asm/arm64/push_registers_asm.cc",
             ],
             cflags: [
+                "-fstack-protector",
                 "-march=armv8-a+memtag",
+                "-mno-outline",
+                "-mno-outline-atomics",
             ],
         },
         android_x86: {
@@ -319,6 +331,7 @@ cc_library_static {
                 "base/allocator/partition_allocator/starscan/stack/asm/x64/push_registers_asm.cc",
             ],
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -391,7 +404,7 @@ cc_genrule {
          "--input_file " +
          "java/lang/Runtime.class " +
          "--javap " +
-         "$$(find out/.path -name javap) " +
+         "$$(find $${OUT_DIR:-out}/.path -name javap) " +
          "--package_prefix " +
          "android.net.http.internal",
     out: [
@@ -415,6 +428,7 @@ cc_genrule {
 cc_library_static {
     name: "cronet_aml_base_base",
     srcs: [
+        ":cronet_aml_base_nodebug_assertion",
         ":cronet_aml_third_party_abseil_cpp_absl_base_base",
         ":cronet_aml_third_party_abseil_cpp_absl_base_log_severity",
         ":cronet_aml_third_party_abseil_cpp_absl_base_malloc_internal",
@@ -975,22 +989,33 @@ cc_library_static {
         "-DBASE_IMPLEMENTATION",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
         "-DICU_UTIL_DATA_IMPL=ICU_UTIL_DATA_FILE",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-DUSE_CHROMIUM_ICU=1",
         "-DU_ENABLE_DYLOAD=0",
         "-DU_ENABLE_RESOURCE_TRACING=0",
         "-DU_ENABLE_TRACING=1",
         "-DU_STATIC_IMPLEMENTATION",
         "-DU_USING_ICU_NAMESPACE=0",
-        "-D_DEBUG",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-O2",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -1007,6 +1032,11 @@ cc_library_static {
         "libgtest_prod_headers",
     ],
     cpp_std: "c++17",
+    ldflags: [
+        "-Wl,--as-needed",
+        "-Wl,--gc-sections",
+        "-Wl,--icf=all",
+    ],
     target: {
         android_arm: {
             srcs: [
@@ -1016,10 +1046,18 @@ cc_library_static {
                 "base/profiler/chrome_unwinder_android_v2.cc",
                 "base/trace_event/cfi_backtrace_android.cc",
             ],
+            cflags: [
+                "-fstack-protector",
+            ],
         },
         android_arm64: {
             srcs: [
                 "base/android/reached_code_profiler.cc",
+            ],
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
             ],
         },
         android_x86: {
@@ -1035,6 +1073,7 @@ cc_library_static {
                 "base/android/reached_code_profiler_stub.cc",
             ],
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -1368,15 +1407,26 @@ cc_library_static {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-O2",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -1385,7 +1435,24 @@ cc_library_static {
         "buildtools/third_party/libc++abi/trunk/include",
     ],
     cpp_std: "c++17",
+    ldflags: [
+        "-Wl,--as-needed",
+        "-Wl,--gc-sections",
+        "-Wl,--icf=all",
+    ],
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -1393,6 +1460,7 @@ cc_library_static {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -1403,7 +1471,7 @@ cc_library_static {
 cc_genrule {
     name: "cronet_aml_base_build_date",
     cmd: "$(location build/write_build_date_header.py) $(out) " +
-         "1672549200",
+         "1676008584",
     out: [
         "base/generated_build_date.h",
     ],
@@ -1466,7 +1534,7 @@ cc_genrule {
     name: "cronet_aml_base_debugging_buildflags",
     cmd: "if [[ ( $$CC_ARCH == 'x86_64' && $$CC_OS == 'android' ) ]]; " +
          "then " +
-         "echo '--flags DCHECK_IS_CONFIGURABLE=\"false\" ENABLE_LOCATION_SOURCE=\"true\" FROM_HERE_USES_LOCATION_BUILTINS=\"true\" ENABLE_PROFILING=\"false\" CAN_UNWIND_WITH_FRAME_POINTERS=\"false\" UNSAFE_DEVELOPER_BUILD=\"true\" CAN_UNWIND_WITH_CFI_TABLE=\"false\" EXCLUDE_UNWIND_TABLES=\"false\" ENABLE_GDBINIT_WARNING=\"true\" ENABLE_LLDBINIT_WARNING=\"false\" EXPENSIVE_DCHECKS_ARE_ON=\"true\" ENABLE_STACK_TRACE_LINE_NUMBERS=\"false\"' | " +
+         "echo '--flags DCHECK_IS_CONFIGURABLE=\"false\" ENABLE_LOCATION_SOURCE=\"true\" FROM_HERE_USES_LOCATION_BUILTINS=\"true\" ENABLE_PROFILING=\"false\" CAN_UNWIND_WITH_FRAME_POINTERS=\"false\" UNSAFE_DEVELOPER_BUILD=\"false\" CAN_UNWIND_WITH_CFI_TABLE=\"false\" EXCLUDE_UNWIND_TABLES=\"true\" ENABLE_GDBINIT_WARNING=\"false\" ENABLE_LLDBINIT_WARNING=\"false\" EXPENSIVE_DCHECKS_ARE_ON=\"false\" ENABLE_STACK_TRACE_LINE_NUMBERS=\"false\"' | " +
          "$(location build/write_buildflag_header.py) --output " +
          "$(out) " +
          "--rulename " +
@@ -1478,7 +1546,7 @@ cc_genrule {
          "fi; " +
          "if [[ ( $$CC_ARCH == 'x86' && $$CC_OS == 'android' ) ]]; " +
          "then " +
-         "echo '--flags DCHECK_IS_CONFIGURABLE=\"false\" ENABLE_LOCATION_SOURCE=\"true\" FROM_HERE_USES_LOCATION_BUILTINS=\"true\" ENABLE_PROFILING=\"false\" CAN_UNWIND_WITH_FRAME_POINTERS=\"true\" UNSAFE_DEVELOPER_BUILD=\"true\" CAN_UNWIND_WITH_CFI_TABLE=\"false\" EXCLUDE_UNWIND_TABLES=\"false\" ENABLE_GDBINIT_WARNING=\"true\" ENABLE_LLDBINIT_WARNING=\"false\" EXPENSIVE_DCHECKS_ARE_ON=\"true\" ENABLE_STACK_TRACE_LINE_NUMBERS=\"false\"' | " +
+         "echo '--flags DCHECK_IS_CONFIGURABLE=\"false\" ENABLE_LOCATION_SOURCE=\"true\" FROM_HERE_USES_LOCATION_BUILTINS=\"true\" ENABLE_PROFILING=\"false\" CAN_UNWIND_WITH_FRAME_POINTERS=\"false\" UNSAFE_DEVELOPER_BUILD=\"false\" CAN_UNWIND_WITH_CFI_TABLE=\"false\" EXCLUDE_UNWIND_TABLES=\"true\" ENABLE_GDBINIT_WARNING=\"false\" ENABLE_LLDBINIT_WARNING=\"false\" EXPENSIVE_DCHECKS_ARE_ON=\"false\" ENABLE_STACK_TRACE_LINE_NUMBERS=\"false\"' | " +
          "$(location build/write_buildflag_header.py) --output " +
          "$(out) " +
          "--rulename " +
@@ -1490,7 +1558,7 @@ cc_genrule {
          "fi; " +
          "if [[ ( $$CC_ARCH == 'arm' && $$CC_OS == 'android' ) ]]; " +
          "then " +
-         "echo '--flags DCHECK_IS_CONFIGURABLE=\"false\" ENABLE_LOCATION_SOURCE=\"true\" FROM_HERE_USES_LOCATION_BUILTINS=\"true\" ENABLE_PROFILING=\"false\" CAN_UNWIND_WITH_FRAME_POINTERS=\"false\" UNSAFE_DEVELOPER_BUILD=\"true\" CAN_UNWIND_WITH_CFI_TABLE=\"true\" EXCLUDE_UNWIND_TABLES=\"false\" ENABLE_GDBINIT_WARNING=\"true\" ENABLE_LLDBINIT_WARNING=\"false\" EXPENSIVE_DCHECKS_ARE_ON=\"true\" ENABLE_STACK_TRACE_LINE_NUMBERS=\"false\"' | " +
+         "echo '--flags DCHECK_IS_CONFIGURABLE=\"false\" ENABLE_LOCATION_SOURCE=\"true\" FROM_HERE_USES_LOCATION_BUILTINS=\"true\" ENABLE_PROFILING=\"false\" CAN_UNWIND_WITH_FRAME_POINTERS=\"false\" UNSAFE_DEVELOPER_BUILD=\"false\" CAN_UNWIND_WITH_CFI_TABLE=\"true\" EXCLUDE_UNWIND_TABLES=\"true\" ENABLE_GDBINIT_WARNING=\"false\" ENABLE_LLDBINIT_WARNING=\"false\" EXPENSIVE_DCHECKS_ARE_ON=\"false\" ENABLE_STACK_TRACE_LINE_NUMBERS=\"false\"' | " +
          "$(location build/write_buildflag_header.py) --output " +
          "$(out) " +
          "--rulename " +
@@ -1502,7 +1570,7 @@ cc_genrule {
          "fi; " +
          "if [[ ( $$CC_ARCH == 'arm64' && $$CC_OS == 'android' ) ]]; " +
          "then " +
-         "echo '--flags DCHECK_IS_CONFIGURABLE=\"false\" ENABLE_LOCATION_SOURCE=\"true\" FROM_HERE_USES_LOCATION_BUILTINS=\"true\" ENABLE_PROFILING=\"false\" CAN_UNWIND_WITH_FRAME_POINTERS=\"true\" UNSAFE_DEVELOPER_BUILD=\"true\" CAN_UNWIND_WITH_CFI_TABLE=\"false\" EXCLUDE_UNWIND_TABLES=\"false\" ENABLE_GDBINIT_WARNING=\"true\" ENABLE_LLDBINIT_WARNING=\"false\" EXPENSIVE_DCHECKS_ARE_ON=\"true\" ENABLE_STACK_TRACE_LINE_NUMBERS=\"false\"' | " +
+         "echo '--flags DCHECK_IS_CONFIGURABLE=\"false\" ENABLE_LOCATION_SOURCE=\"true\" FROM_HERE_USES_LOCATION_BUILTINS=\"true\" ENABLE_PROFILING=\"false\" CAN_UNWIND_WITH_FRAME_POINTERS=\"true\" UNSAFE_DEVELOPER_BUILD=\"false\" CAN_UNWIND_WITH_CFI_TABLE=\"false\" EXCLUDE_UNWIND_TABLES=\"true\" ENABLE_GDBINIT_WARNING=\"false\" ENABLE_LLDBINIT_WARNING=\"false\" EXPENSIVE_DCHECKS_ARE_ON=\"false\" ENABLE_STACK_TRACE_LINE_NUMBERS=\"false\"' | " +
          "$(location build/write_buildflag_header.py) --output " +
          "$(out) " +
          "--rulename " +
@@ -1665,6 +1733,79 @@ cc_genrule {
     apex_available: [
         "com.android.tethering",
     ],
+}
+
+// GN: //base:nodebug_assertion
+cc_object {
+    name: "cronet_aml_base_nodebug_assertion",
+    srcs: [
+        "base/nodebug_assertion.cc",
+    ],
+    static_libs: [
+        "cronet_aml_base_base_static",
+    ],
+    defaults: [
+        "cronet_aml_defaults",
+    ],
+    cflags: [
+        "-DANDROID",
+        "-DANDROID_NDK_VERSION_ROLL=r23_1",
+        "-DBASE_IMPLEMENTATION",
+        "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
+        "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
+        "-DHAVE_SYS_UIO_H",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
+        "-D_FORTIFY_SOURCE=2",
+        "-D_GNU_SOURCE",
+        "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-D__STDC_CONSTANT_MACROS",
+        "-D__STDC_FORMAT_MACROS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
+    ],
+    local_include_dirs: [
+        "./",
+        "buildtools/third_party/libc++/",
+        "buildtools/third_party/libc++/trunk/include",
+        "buildtools/third_party/libc++abi/trunk/include",
+    ],
+    cpp_std: "c++17",
+    target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
+        android_x86: {
+            cflags: [
+                "-msse3",
+            ],
+        },
+        android_x86_64: {
+            cflags: [
+                "-fstack-protector",
+                "-msse3",
+            ],
+        },
+    },
 }
 
 // GN: //base:orderfile_buildflags
@@ -1865,15 +2006,26 @@ cc_library_static {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -1882,7 +2034,24 @@ cc_library_static {
         "buildtools/third_party/libc++abi/trunk/include",
     ],
     cpp_std: "c++17",
+    ldflags: [
+        "-Wl,--as-needed",
+        "-Wl,--gc-sections",
+        "-Wl,--icf=all",
+    ],
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -1890,6 +2059,7 @@ cc_library_static {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -1910,13 +2080,23 @@ cc_library_static {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-O2",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -1925,7 +2105,24 @@ cc_library_static {
         "buildtools/third_party/libc++abi/trunk/include",
     ],
     cpp_std: "c++17",
+    ldflags: [
+        "-Wl,--as-needed",
+        "-Wl,--gc-sections",
+        "-Wl,--icf=all",
+    ],
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -1933,6 +2130,7 @@ cc_library_static {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -1972,7 +2170,7 @@ genrule {
         "soong_zip",
     ],
     cmd: "cp $(in) $(genDir)/BuildConfig.java && " +
-         "$(location soong_zip) -o $(out) -srcjar -f $(genDir)/BuildConfig.java",
+         "$(location soong_zip) -o $(out) -srcjar -C $(genDir) -f $(genDir)/BuildConfig.java",
     out: [
         "BuildConfig.srcjar",
     ],
@@ -1986,7 +2184,6 @@ cc_object {
     ],
     cflags: [
         "-DANDROID",
-        "-D_ENABLE_ASSERTS",
         "-E",
         "-P",
     ],
@@ -2169,15 +2366,25 @@ cc_object {
     cflags: [
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DLIBCXX_BUILDING_LIBCXXABI",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
+        "-D_LIBCPP_AVAILABILITY_CUSTOM_VERBOSE_ABORT_PROVIDED=1",
         "-D_LIBCPP_BUILDING_LIBRARY",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCPP_OVERRIDABLE_FUNC_VIS=__attribute__((__visibility__(\"default\")))",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -2197,6 +2404,8 @@ cc_object {
                 "-DANDROID",
                 "-DANDROID_NDK_VERSION_ROLL=r23_1",
                 "-DHAVE_SYS_UIO_H",
+                "-Oz",
+                "-fstack-protector",
             ],
         },
         android_arm64: {
@@ -2204,6 +2413,10 @@ cc_object {
                 "-DANDROID",
                 "-DANDROID_NDK_VERSION_ROLL=r23_1",
                 "-DHAVE_SYS_UIO_H",
+                "-Oz",
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
             ],
         },
         android_x86: {
@@ -2211,6 +2424,7 @@ cc_object {
                 "-DANDROID",
                 "-DANDROID_NDK_VERSION_ROLL=r23_1",
                 "-DHAVE_SYS_UIO_H",
+                "-Oz",
                 "-msse3",
             ],
         },
@@ -2219,6 +2433,8 @@ cc_object {
                 "-DANDROID",
                 "-DANDROID_NDK_VERSION_ROLL=r23_1",
                 "-DHAVE_SYS_UIO_H",
+                "-Oz",
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -2231,6 +2447,8 @@ cc_object {
                 "-D_FILE_OFFSET_BITS=64",
                 "-D_LARGEFILE64_SOURCE",
                 "-D_LARGEFILE_SOURCE",
+                "-O2",
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -2265,15 +2483,24 @@ cc_object {
     cflags: [
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DLIBCXXABI_SILENT_TERMINATE",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_BUILDING_LIBRARY",
         "-D_LIBCPP_CONSTINIT=constinit",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -2296,6 +2523,8 @@ cc_object {
                 "-DANDROID",
                 "-DANDROID_NDK_VERSION_ROLL=r23_1",
                 "-DHAVE_SYS_UIO_H",
+                "-Oz",
+                "-fstack-protector",
             ],
         },
         android_arm64: {
@@ -2306,6 +2535,10 @@ cc_object {
                 "-DANDROID",
                 "-DANDROID_NDK_VERSION_ROLL=r23_1",
                 "-DHAVE_SYS_UIO_H",
+                "-Oz",
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
             ],
         },
         android_x86: {
@@ -2316,6 +2549,7 @@ cc_object {
                 "-DANDROID",
                 "-DANDROID_NDK_VERSION_ROLL=r23_1",
                 "-DHAVE_SYS_UIO_H",
+                "-Oz",
                 "-msse3",
             ],
         },
@@ -2327,6 +2561,8 @@ cc_object {
                 "-DANDROID",
                 "-DANDROID_NDK_VERSION_ROLL=r23_1",
                 "-DHAVE_SYS_UIO_H",
+                "-Oz",
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -2342,6 +2578,8 @@ cc_object {
                 "-D_FILE_OFFSET_BITS=64",
                 "-D_LARGEFILE64_SOURCE",
                 "-D_LARGEFILE_SOURCE",
+                "-O2",
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -2442,19 +2680,30 @@ cc_library_shared {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DGOOGLE_PROTOBUF_INTERNAL_DONATE_STEAL_INLINE=0",
         "-DGOOGLE_PROTOBUF_NO_RTTI",
         "-DGOOGLE_PROTOBUF_NO_STATIC_INITIALIZER",
         "-DHAVE_PTHREAD",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -2469,11 +2718,26 @@ cc_library_shared {
         "third_party/protobuf/src/",
     ],
     cpp_std: "c++17",
-    linker_scripts: [
-        "base/android/library_loader/anchor_functions.lds",
+    ldflags: [
+        "-Wl,--as-needed",
+        "-Wl,--gc-sections",
+        "-Wl,--icf=all",
+        "-Wl,--script,external/cronet/base/android/library_loader/anchor_functions.lds",
     ],
     stem: "libcronet.108.0.5359.128",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -2481,6 +2745,7 @@ cc_library_shared {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -3106,19 +3371,30 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DGOOGLE_PROTOBUF_INTERNAL_DONATE_STEAL_INLINE=0",
         "-DGOOGLE_PROTOBUF_NO_RTTI",
         "-DGOOGLE_PROTOBUF_NO_STATIC_INITIALIZER",
         "-DHAVE_PTHREAD",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -3134,6 +3410,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -3141,6 +3429,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -3169,7 +3458,8 @@ java_genrule {
 // GN: //components/cronet/android:implementation_api_version
 java_genrule {
     name: "cronet_aml_components_cronet_android_implementation_api_version",
-    cmd: "$(location build/util/version.py) -f " +
+    cmd: "$(location build/util/version.py) --official " +
+         "-f " +
          "$(location chrome/VERSION) " +
          "-f " +
          "$(location build/util/LASTCHANGE) " +
@@ -3200,7 +3490,7 @@ genrule {
         "soong_zip",
     ],
     cmd: "cp $(in) $(genDir)/IntegratedModeState.java && " +
-         "$(location soong_zip) -o $(out) -srcjar -f $(genDir)/IntegratedModeState.java",
+         "$(location soong_zip) -o $(out) -srcjar -C $(genDir) -f $(genDir)/IntegratedModeState.java",
     out: [
         "IntegratedModeState.srcjar",
     ],
@@ -3235,7 +3525,8 @@ genrule {
 // GN: //components/cronet/android:interface_api_version
 java_genrule {
     name: "cronet_aml_components_cronet_android_interface_api_version",
-    cmd: "$(location build/util/version.py) -f " +
+    cmd: "$(location build/util/version.py) --official " +
+         "-f " +
          "$(location chrome/VERSION) " +
          "-f " +
          "$(location build/util/LASTCHANGE) " +
@@ -3266,7 +3557,7 @@ genrule {
         "soong_zip",
     ],
     cmd: "cp $(in) $(genDir)/LoadState.java && " +
-         "$(location soong_zip) -o $(out) -srcjar -f $(genDir)/LoadState.java",
+         "$(location soong_zip) -o $(out) -srcjar -C $(genDir) -f $(genDir)/LoadState.java",
     out: [
         "LoadState.srcjar",
     ],
@@ -3468,19 +3759,30 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DGOOGLE_PROTOBUF_INTERNAL_DONATE_STEAL_INLINE=0",
         "-DGOOGLE_PROTOBUF_NO_RTTI",
         "-DGOOGLE_PROTOBUF_NO_STATIC_INITIALIZER",
         "-DHAVE_PTHREAD",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -3496,6 +3798,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -3503,6 +3817,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -3512,7 +3827,8 @@ cc_object {
 // GN: //components/cronet:cronet_version_header_action
 cc_genrule {
     name: "cronet_aml_components_cronet_cronet_version_header_action",
-    cmd: "$(location build/util/version.py) -f " +
+    cmd: "$(location build/util/version.py) --official " +
+         "-f " +
          "$(location chrome/VERSION) " +
          "-e " +
          "'VERSION_FULL=\"%s.%s.%s.%s\" % (MAJOR,MINOR,BUILD,PATCH)' " +
@@ -3564,15 +3880,26 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -3584,6 +3911,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -3591,6 +3930,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -3634,19 +3974,30 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DGOOGLE_PROTOBUF_INTERNAL_DONATE_STEAL_INLINE=0",
         "-DGOOGLE_PROTOBUF_NO_RTTI",
         "-DGOOGLE_PROTOBUF_NO_STATIC_INITIALIZER",
         "-DHAVE_PTHREAD",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -3659,6 +4010,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -3666,6 +4029,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -3769,15 +4133,26 @@ cc_library_static {
         "-DCOMPONENTS_PREFS_IMPLEMENTATION",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -3788,7 +4163,24 @@ cc_library_static {
         "third_party/boringssl/src/include/",
     ],
     cpp_std: "c++17",
+    ldflags: [
+        "-Wl,--as-needed",
+        "-Wl,--gc-sections",
+        "-Wl,--icf=all",
+    ],
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -3796,6 +4188,7 @@ cc_library_static {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -3880,15 +4273,26 @@ cc_library_static {
         "-DCRYPTO_IMPLEMENTATION",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -3899,7 +4303,24 @@ cc_library_static {
         "third_party/boringssl/src/include/",
     ],
     cpp_std: "c++17",
+    ldflags: [
+        "-Wl,--as-needed",
+        "-Wl,--gc-sections",
+        "-Wl,--icf=all",
+    ],
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -3907,6 +4328,7 @@ cc_library_static {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -3918,9 +4340,7 @@ cc_defaults {
     name: "cronet_aml_defaults",
     cflags: [
         "-DGOOGLE_PROTOBUF_NO_RTTI",
-        "-O2",
         "-Wno-ambiguous-reversed-operator",
-        "-Wno-deprecated-non-prototype",
         "-Wno-error=return-type",
         "-Wno-macro-redefined",
         "-Wno-missing-field-initializers",
@@ -3931,7 +4351,6 @@ cc_defaults {
         "-Wno-unreachable-code-loop-increment",
         "-Wno-unused-parameter",
         "-fPIC",
-        "-fvisibility=hidden",
     ],
     stl: "none",
     apex_available: [
@@ -4289,7 +4708,7 @@ genrule {
         "soong_zip",
     ],
     cmd: "cp $(in) $(genDir)/NetError.java && " +
-         "$(location soong_zip) -o $(out) -srcjar -f $(genDir)/NetError.java",
+         "$(location soong_zip) -o $(out) -srcjar -C $(genDir) -f $(genDir)/NetError.java",
     out: [
         "NetError.srcjar",
     ],
@@ -4524,21 +4943,32 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DENABLE_BUILT_IN_DNS",
         "-DGOOGLE_PROTOBUF_INTERNAL_DONATE_STEAL_INLINE=0",
         "-DGOOGLE_PROTOBUF_NO_RTTI",
         "-DGOOGLE_PROTOBUF_NO_STATIC_INITIALIZER",
         "-DHAVE_PTHREAD",
         "-DHAVE_SYS_UIO_H",
+        "-DNDEBUG",
         "-DNET_IMPLEMENTATION",
-        "-D_DEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -4555,6 +4985,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -4562,6 +5004,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -4626,21 +5069,32 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DENABLE_BUILT_IN_DNS",
         "-DGOOGLE_PROTOBUF_INTERNAL_DONATE_STEAL_INLINE=0",
         "-DGOOGLE_PROTOBUF_NO_RTTI",
         "-DGOOGLE_PROTOBUF_NO_STATIC_INITIALIZER",
         "-DHAVE_PTHREAD",
         "-DHAVE_SYS_UIO_H",
+        "-DNDEBUG",
         "-DNET_IMPLEMENTATION",
-        "-D_DEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -4657,6 +5111,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -4664,6 +5130,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -4741,21 +5208,32 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DENABLE_BUILT_IN_DNS",
         "-DGOOGLE_PROTOBUF_INTERNAL_DONATE_STEAL_INLINE=0",
         "-DGOOGLE_PROTOBUF_NO_RTTI",
         "-DGOOGLE_PROTOBUF_NO_STATIC_INITIALIZER",
         "-DHAVE_PTHREAD",
         "-DHAVE_SYS_UIO_H",
+        "-DNDEBUG",
         "-DNET_IMPLEMENTATION",
-        "-D_DEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -4772,6 +5250,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -4779,6 +5269,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -5407,21 +5898,32 @@ cc_library_static {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DENABLE_BUILT_IN_DNS",
         "-DGOOGLE_PROTOBUF_INTERNAL_DONATE_STEAL_INLINE=0",
         "-DGOOGLE_PROTOBUF_NO_RTTI",
         "-DGOOGLE_PROTOBUF_NO_STATIC_INITIALIZER",
         "-DHAVE_PTHREAD",
         "-DHAVE_SYS_UIO_H",
+        "-DNDEBUG",
         "-DNET_IMPLEMENTATION",
-        "-D_DEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -5437,15 +5939,28 @@ cc_library_static {
         "third_party/protobuf/src/",
     ],
     cpp_std: "c++17",
+    ldflags: [
+        "-Wl,--as-needed",
+        "-Wl,--gc-sections",
+        "-Wl,--icf=all",
+    ],
     target: {
         android_arm: {
             srcs: [
                 "net/disk_cache/blockfile/mapped_file_bypass_mmap_posix.cc",
             ],
+            cflags: [
+                "-fstack-protector",
+            ],
         },
         android_arm64: {
             srcs: [
                 "net/disk_cache/blockfile/mapped_file_bypass_mmap_posix.cc",
+            ],
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
             ],
         },
         android_x86: {
@@ -5461,6 +5976,7 @@ cc_library_static {
                 "net/disk_cache/blockfile/mapped_file_bypass_mmap_posix.cc",
             ],
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -5512,21 +6028,32 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DENABLE_BUILT_IN_DNS",
         "-DGOOGLE_PROTOBUF_INTERNAL_DONATE_STEAL_INLINE=0",
         "-DGOOGLE_PROTOBUF_NO_RTTI",
         "-DGOOGLE_PROTOBUF_NO_STATIC_INITIALIZER",
         "-DHAVE_PTHREAD",
         "-DHAVE_SYS_UIO_H",
+        "-DNDEBUG",
         "-DNET_IMPLEMENTATION",
-        "-D_DEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -5540,6 +6067,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -5547,6 +6086,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -5744,19 +6284,30 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DGOOGLE_PROTOBUF_INTERNAL_DONATE_STEAL_INLINE=0",
         "-DGOOGLE_PROTOBUF_NO_RTTI",
         "-DGOOGLE_PROTOBUF_NO_STATIC_INITIALIZER",
         "-DHAVE_PTHREAD",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -5772,6 +6323,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -5779,6 +6342,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -5815,15 +6379,26 @@ cc_library_static {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -5834,7 +6409,24 @@ cc_library_static {
         "third_party/boringssl/src/include/",
     ],
     cpp_std: "c++17",
+    ldflags: [
+        "-Wl,--as-needed",
+        "-Wl,--gc-sections",
+        "-Wl,--icf=all",
+    ],
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -5842,6 +6434,7 @@ cc_library_static {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -6308,20 +6901,31 @@ cc_library_static {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DGOOGLE_PROTOBUF_INTERNAL_DONATE_STEAL_INLINE=0",
         "-DGOOGLE_PROTOBUF_NO_RTTI",
         "-DGOOGLE_PROTOBUF_NO_STATIC_INITIALIZER",
         "-DHAVE_PTHREAD",
         "-DHAVE_SYS_UIO_H",
         "-DIS_QUICHE_IMPL",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -6336,7 +6940,24 @@ cc_library_static {
         "third_party/protobuf/src/",
     ],
     cpp_std: "c++17",
+    ldflags: [
+        "-Wl,--as-needed",
+        "-Wl,--gc-sections",
+        "-Wl,--icf=all",
+    ],
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -6344,6 +6965,7 @@ cc_library_static {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -6383,15 +7005,26 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -6403,6 +7036,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -6410,6 +7055,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -6446,16 +7092,27 @@ cc_library_static {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
         "-DIS_URI_TEMPLATE_IMPL",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -6466,7 +7123,24 @@ cc_library_static {
         "third_party/boringssl/src/include/",
     ],
     cpp_std: "c++17",
+    ldflags: [
+        "-Wl,--as-needed",
+        "-Wl,--gc-sections",
+        "-Wl,--icf=all",
+    ],
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -6474,6 +7148,7 @@ cc_library_static {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -6499,13 +7174,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -6516,6 +7201,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -6523,6 +7220,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -6544,13 +7242,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -6561,6 +7269,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -6568,6 +7288,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -6589,13 +7310,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -6606,6 +7337,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -6613,6 +7356,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -6634,13 +7378,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -6651,6 +7405,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -6658,6 +7424,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -6679,13 +7446,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -6696,6 +7473,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -6703,6 +7492,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -6724,13 +7514,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -6741,6 +7541,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -6748,6 +7560,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -6769,13 +7582,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -6786,6 +7609,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -6793,6 +7628,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -6815,13 +7651,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -6832,6 +7678,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -6839,6 +7697,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -6860,13 +7719,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -6877,6 +7746,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -6884,6 +7765,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -6907,13 +7789,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -6924,6 +7816,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -6931,6 +7835,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -6952,13 +7857,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -6969,6 +7884,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -6976,6 +7903,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -6997,13 +7925,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -7014,6 +7952,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -7021,6 +7971,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -7042,13 +7993,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -7059,6 +8020,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -7066,6 +8039,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -7087,13 +8061,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -7104,6 +8088,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -7111,6 +8107,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -7132,13 +8129,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -7149,6 +8156,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -7156,6 +8175,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -7177,13 +8197,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -7194,6 +8224,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -7201,6 +8243,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -7222,13 +8265,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -7239,6 +8292,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -7246,6 +8311,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -7267,13 +8333,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -7284,6 +8360,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -7291,6 +8379,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -7312,13 +8401,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -7329,6 +8428,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -7336,6 +8447,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -7357,13 +8469,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -7374,6 +8496,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -7381,6 +8515,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -7403,13 +8538,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -7420,6 +8565,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -7427,6 +8584,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -7451,13 +8609,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -7468,6 +8636,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -7475,6 +8655,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -7499,13 +8680,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -7516,6 +8707,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -7523,6 +8726,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -7547,13 +8751,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -7564,6 +8778,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -7571,6 +8797,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -7595,13 +8822,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -7612,6 +8849,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -7619,6 +8868,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -7643,13 +8893,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -7660,6 +8920,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -7667,6 +8939,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -7691,13 +8964,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -7708,6 +8991,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -7715,6 +9010,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -7736,13 +9032,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -7753,6 +9059,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -7760,6 +9078,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -7781,13 +9100,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -7798,6 +9127,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -7805,6 +9146,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -7829,13 +9171,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -7846,6 +9198,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -7853,6 +9217,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -7875,13 +9240,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -7892,6 +9267,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -7899,6 +9286,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -7920,13 +9308,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -7937,6 +9335,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -7944,6 +9354,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -7967,13 +9378,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -7984,6 +9405,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -7991,6 +9424,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -8018,13 +9452,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -8035,6 +9479,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -8042,6 +9498,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -8063,13 +9520,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -8080,6 +9547,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -8087,6 +9566,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -8108,13 +9588,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -8125,6 +9615,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -8132,6 +9634,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -8153,13 +9656,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -8170,6 +9683,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -8177,6 +9702,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -8200,13 +9726,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -8217,6 +9753,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -8224,6 +9772,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -8250,13 +9799,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -8267,6 +9826,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -8274,6 +9845,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -8307,13 +9879,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -8324,6 +9906,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -8331,6 +9925,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -8352,13 +9947,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -8369,6 +9974,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -8376,6 +9993,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -8403,13 +10021,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -8420,6 +10048,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -8427,6 +10067,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -8448,13 +10089,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -8465,6 +10116,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -8472,6 +10135,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -8501,13 +10165,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -8518,6 +10192,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -8525,6 +10211,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -8550,13 +10237,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -8567,6 +10264,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -8574,6 +10283,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -8595,13 +10305,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -8612,6 +10332,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -8619,6 +10351,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -8640,13 +10373,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -8657,6 +10400,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -8664,6 +10419,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -8684,13 +10440,23 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -8701,6 +10467,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -8708,6 +10486,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -8728,15 +10507,26 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -8746,6 +10536,18 @@ cc_object {
     ],
     cpp_std: "c++17",
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -8753,6 +10555,7 @@ cc_object {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -9042,14 +10845,24 @@ cc_library_static {
         "-DBORINGSSL_NO_STATIC_INITIALIZER",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-DOPENSSL_SMALL",
-        "-D_DEBUG",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -9059,7 +10872,24 @@ cc_library_static {
         "third_party/boringssl/src/include/",
     ],
     cpp_std: "c++17",
+    ldflags: [
+        "-Wl,--as-needed",
+        "-Wl,--gc-sections",
+        "-Wl,--icf=all",
+    ],
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -9067,6 +10897,7 @@ cc_library_static {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -9084,15 +10915,26 @@ cc_object {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -9119,6 +10961,9 @@ cc_object {
                 "third_party/boringssl/src/crypto/curve25519/asm/x25519-asm-arm.S",
                 "third_party/boringssl/src/crypto/poly1305/poly1305_arm_asm.S",
             ],
+            cflags: [
+                "-fstack-protector",
+            ],
         },
         android_arm64: {
             srcs: [
@@ -9135,6 +10980,11 @@ cc_object {
                 "third_party/boringssl/linux-aarch64/crypto/fipsmodule/sha512-armv8.S",
                 "third_party/boringssl/linux-aarch64/crypto/fipsmodule/vpaes-armv8.S",
                 "third_party/boringssl/linux-aarch64/crypto/test/trampoline-armv8.S",
+            ],
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
             ],
         },
         android_x86: {
@@ -9181,6 +11031,7 @@ cc_object {
                 "third_party/boringssl/src/crypto/hrss/asm/poly_rq_mul.S",
             ],
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -9206,15 +11057,26 @@ cc_library_static {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -9224,7 +11086,24 @@ cc_library_static {
         "third_party/brotli/include/",
     ],
     cpp_std: "c++17",
+    ldflags: [
+        "-Wl,--as-needed",
+        "-Wl,--gc-sections",
+        "-Wl,--icf=all",
+    ],
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -9232,6 +11111,7 @@ cc_library_static {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -9258,13 +11138,23 @@ cc_library_static {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-O2",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -9274,7 +11164,24 @@ cc_library_static {
         "third_party/brotli/include/",
     ],
     cpp_std: "c++17",
+    ldflags: [
+        "-Wl,--as-needed",
+        "-Wl,--gc-sections",
+        "-Wl,--icf=all",
+    ],
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -9282,6 +11189,7 @@ cc_library_static {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -9544,11 +11452,14 @@ cc_library_static {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_DLOPEN=0",
         "-DHAVE_SYS_UIO_H",
         "-DICU_UTIL_DATA_IMPL=ICU_UTIL_DATA_FILE",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-DUCONFIG_ONLY_HTML_CONVERSION=1",
         "-DUCONFIG_USE_WINDOWS_LCID_MAPPING_API=0",
         "-DUSE_CHROMIUM_ICU=1",
@@ -9559,10 +11470,17 @@ cc_library_static {
         "-DU_I18N_IMPLEMENTATION",
         "-DU_STATIC_IMPLEMENTATION",
         "-DU_USING_ICU_NAMESPACE=0",
-        "-D_DEBUG",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -9573,8 +11491,25 @@ cc_library_static {
         "third_party/icu/source/i18n/",
     ],
     cpp_std: "c++17",
+    ldflags: [
+        "-Wl,--as-needed",
+        "-Wl,--gc-sections",
+        "-Wl,--icf=all",
+    ],
     rtti: true,
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -9582,6 +11517,7 @@ cc_library_static {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -9800,11 +11736,14 @@ cc_library_static {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_DLOPEN=0",
         "-DHAVE_SYS_UIO_H",
         "-DICU_UTIL_DATA_IMPL=ICU_UTIL_DATA_FILE",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-DUCONFIG_ONLY_HTML_CONVERSION=1",
         "-DUCONFIG_USE_WINDOWS_LCID_MAPPING_API=0",
         "-DUSE_CHROMIUM_ICU=1",
@@ -9816,10 +11755,17 @@ cc_library_static {
         "-DU_ICUDATAENTRY_IN_COMMON",
         "-DU_STATIC_IMPLEMENTATION",
         "-DU_USING_ICU_NAMESPACE=0",
-        "-D_DEBUG",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -9830,8 +11776,25 @@ cc_library_static {
         "third_party/icu/source/i18n/",
     ],
     cpp_std: "c++17",
+    ldflags: [
+        "-Wl,--as-needed",
+        "-Wl,--gc-sections",
+        "-Wl,--icf=all",
+    ],
     rtti: true,
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -9839,6 +11802,7 @@ cc_library_static {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -9872,14 +11836,24 @@ cc_library_static {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_CONFIG_H",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-O2",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -9889,7 +11863,24 @@ cc_library_static {
         "third_party/libevent/android/",
     ],
     cpp_std: "c++17",
+    ldflags: [
+        "-Wl,--as-needed",
+        "-Wl,--gc-sections",
+        "-Wl,--icf=all",
+    ],
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -9897,6 +11888,7 @@ cc_library_static {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -10062,15 +12054,26 @@ cc_library_static {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -10079,7 +12082,24 @@ cc_library_static {
         "buildtools/third_party/libc++abi/trunk/include",
     ],
     cpp_std: "c++17",
+    ldflags: [
+        "-Wl,--as-needed",
+        "-Wl,--gc-sections",
+        "-Wl,--icf=all",
+    ],
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -10087,6 +12107,7 @@ cc_library_static {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -10194,23 +12215,34 @@ cc_library_static {
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
         "-DCR_SYSROOT_KEY=20220331T153654Z-0",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DGOOGLE_PROTOBUF_INTERNAL_DONATE_STEAL_INLINE=0",
         "-DGOOGLE_PROTOBUF_NO_RTTI",
         "-DGOOGLE_PROTOBUF_NO_STATIC_INITIALIZER",
         "-DHAVE_PTHREAD",
         "-DHAVE_ZLIB",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-DUSE_AURA=1",
         "-DUSE_OZONE=1",
         "-DUSE_UDEV",
-        "-D_DEBUG",
         "-D_FILE_OFFSET_BITS=64",
         "-D_GNU_SOURCE",
         "-D_LARGEFILE64_SOURCE",
         "-D_LARGEFILE_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-O2",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fstack-protector",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
         "-msse3",
     ],
     local_include_dirs: [
@@ -10221,6 +12253,11 @@ cc_library_static {
         "third_party/protobuf/src/",
     ],
     cpp_std: "c++20",
+    ldflags: [
+        "-Wl,--as-needed",
+        "-Wl,--gc-sections",
+        "-Wl,--icf=all",
+    ],
 }
 
 // GN: //third_party/protobuf:protobuf_lite
@@ -10271,17 +12308,27 @@ cc_library_static {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DGOOGLE_PROTOBUF_INTERNAL_DONATE_STEAL_INLINE=0",
         "-DGOOGLE_PROTOBUF_NO_RTTI",
         "-DGOOGLE_PROTOBUF_NO_STATIC_INITIALIZER",
         "-DHAVE_PTHREAD",
         "-DHAVE_SYS_UIO_H",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-O2",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -10291,7 +12338,24 @@ cc_library_static {
         "third_party/protobuf/src/",
     ],
     cpp_std: "c++17",
+    ldflags: [
+        "-Wl,--as-needed",
+        "-Wl,--gc-sections",
+        "-Wl,--icf=all",
+    ],
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -10299,6 +12363,7 @@ cc_library_static {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -10329,22 +12394,33 @@ cc_binary {
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
         "-DCR_SYSROOT_KEY=20220331T153654Z-0",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DGOOGLE_PROTOBUF_INTERNAL_DONATE_STEAL_INLINE=0",
         "-DGOOGLE_PROTOBUF_NO_RTTI",
         "-DGOOGLE_PROTOBUF_NO_STATIC_INITIALIZER",
         "-DHAVE_PTHREAD",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-DUSE_AURA=1",
         "-DUSE_OZONE=1",
         "-DUSE_UDEV",
-        "-D_DEBUG",
         "-D_FILE_OFFSET_BITS=64",
         "-D_GNU_SOURCE",
         "-D_LARGEFILE64_SOURCE",
         "-D_LARGEFILE_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-O2",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fstack-protector",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
         "-msse3",
     ],
     local_include_dirs: [
@@ -10355,6 +12431,11 @@ cc_binary {
         "third_party/protobuf/src/",
     ],
     cpp_std: "c++20",
+    ldflags: [
+        "-Wl,--as-needed",
+        "-Wl,--gc-sections",
+        "-Wl,--icf=all",
+    ],
 }
 
 // GN: //third_party/protobuf:protoc_lib
@@ -10462,22 +12543,33 @@ cc_library_static {
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
         "-DCR_SYSROOT_KEY=20220331T153654Z-0",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DGOOGLE_PROTOBUF_INTERNAL_DONATE_STEAL_INLINE=0",
         "-DGOOGLE_PROTOBUF_NO_RTTI",
         "-DGOOGLE_PROTOBUF_NO_STATIC_INITIALIZER",
         "-DHAVE_PTHREAD",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
         "-DUSE_AURA=1",
         "-DUSE_OZONE=1",
         "-DUSE_UDEV",
-        "-D_DEBUG",
         "-D_FILE_OFFSET_BITS=64",
         "-D_GNU_SOURCE",
         "-D_LARGEFILE64_SOURCE",
         "-D_LARGEFILE_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
+        "-O2",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fstack-protector",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
         "-msse3",
     ],
     local_include_dirs: [
@@ -10488,6 +12580,11 @@ cc_library_static {
         "third_party/protobuf/src/",
     ],
     cpp_std: "c++20",
+    ldflags: [
+        "-Wl,--as-needed",
+        "-Wl,--gc-sections",
+        "-Wl,--icf=all",
+    ],
 }
 
 // GN: //url:buildflags
@@ -10578,16 +12675,27 @@ cc_library_static {
         "-DANDROID_NDK_VERSION_ROLL=r23_1",
         "-DCR_CLANG_REVISION=\"llvmorg-16-init-6578-g0d30e92f-2\"",
         "-DCR_LIBCXX_REVISION=64d36e572d3f9719c5d75011a718f33f11126851",
-        "-DDCHECK_ALWAYS_ON=1",
-        "-DDYNAMIC_ANNOTATIONS_ENABLED=1",
+        "-DDYNAMIC_ANNOTATIONS_ENABLED=0",
         "-DHAVE_SYS_UIO_H",
         "-DIS_URL_IMPL",
-        "-D_DEBUG",
+        "-DNDEBUG",
+        "-DNO_UNWIND_TABLES",
+        "-DNVALGRIND",
+        "-DOFFICIAL_BUILD",
+        "-D_FORTIFY_SOURCE=2",
         "-D_GNU_SOURCE",
         "-D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS",
         "-D__STDC_CONSTANT_MACROS",
         "-D__STDC_FORMAT_MACROS",
+        "-Oz",
+        "-fdata-sections",
+        "-ffunction-sections",
+        "-fno-asynchronous-unwind-tables",
+        "-fno-unwind-tables",
+        "-fvisibility-inlines-hidden",
+        "-fvisibility=hidden",
+        "-g1",
     ],
     local_include_dirs: [
         "./",
@@ -10598,7 +12706,24 @@ cc_library_static {
         "third_party/boringssl/src/include/",
     ],
     cpp_std: "c++17",
+    ldflags: [
+        "-Wl,--as-needed",
+        "-Wl,--gc-sections",
+        "-Wl,--icf=all",
+    ],
     target: {
+        android_arm: {
+            cflags: [
+                "-fstack-protector",
+            ],
+        },
+        android_arm64: {
+            cflags: [
+                "-fstack-protector",
+                "-mno-outline",
+                "-mno-outline-atomics",
+            ],
+        },
         android_x86: {
             cflags: [
                 "-msse3",
@@ -10606,6 +12731,7 @@ cc_library_static {
         },
         android_x86_64: {
             cflags: [
+                "-fstack-protector",
                 "-msse3",
             ],
         },
@@ -10660,15 +12786,11 @@ license {
         "SPDX-license-identifier-Apache-2.0",
         "SPDX-license-identifier-BSD",
         "SPDX-license-identifier-BSL-1.0",
-        "SPDX-license-identifier-GPL",
-        "SPDX-license-identifier-GPL-2.0",
-        "SPDX-license-identifier-GPL-3.0",
         "SPDX-license-identifier-ICU",
         "SPDX-license-identifier-ISC",
-        "SPDX-license-identifier-LGPL",
-        "SPDX-license-identifier-LGPL-2.1",
         "SPDX-license-identifier-MIT",
         "SPDX-license-identifier-MPL",
+        "SPDX-license-identifier-MPL-1.1",
         "SPDX-license-identifier-MPL-2.0",
         "SPDX-license-identifier-NCSA",
         "SPDX-license-identifier-OpenSSL",
