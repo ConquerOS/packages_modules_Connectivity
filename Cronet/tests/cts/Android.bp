@@ -29,6 +29,10 @@ cronet_test_java_defaults = "CronetTestJavaDefaultsEnabled"
 java_defaults {
     name: "CronetTestJavaDefaultsEnabled",
     enabled: true,
+    // TODO(danstahr): move to unconditional static_libs once the T branch is abandoned
+    static_libs: [
+        "truth",
+    ],
 }
 
 java_defaults {
@@ -43,27 +47,31 @@ java_defaults {
 
 android_library {
     name: "CtsNetHttpTestsLib",
+    defaults: [
+        "cts_defaults",
+        "CronetTestJavaDefaults",
+    ],
     sdk_version: "test_current",
+    min_sdk_version: "30",
     srcs: [
         "src/**/*.java",
         "src/**/*.kt",
     ],
     static_libs: [
-        "androidx.test.rules",
-        "androidx.core_core",
+        "androidx.test.ext.junit",
         "ctstestrunner-axt",
         "ctstestserver",
         "junit",
         "hamcrest-library",
+        "kotlin-test",
     ],
     libs: [
-        "android.test.runner",
         "android.test.base",
-        "android.test.mock",
         "androidx.annotation_annotation",
         "framework-tethering",
         "org.apache.http.legacy",
     ],
+    lint: { test: true }
 }
 
 android_test {
@@ -73,7 +81,6 @@ android_test {
         "CronetTestJavaDefaults",
     ],
     sdk_version: "test_current",
-    compile_multilib: "both", // Include both the 32 and 64 bit versions
     static_libs: ["CtsNetHttpTestsLib"],
     // Tag this as a cts test artifact
     test_suites: [

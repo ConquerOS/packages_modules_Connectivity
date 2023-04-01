@@ -2521,7 +2521,7 @@ public class ConnectivityManager {
     @RequiresPermission(android.Manifest.permission.PACKET_KEEPALIVE_OFFLOAD)
     public @NonNull SocketKeepalive createSocketKeepalive(@NonNull Network network,
             @NonNull Socket socket,
-            @NonNull Executor executor,
+            @NonNull @CallbackExecutor Executor executor,
             @NonNull Callback callback) {
         ParcelFileDescriptor dup;
         try {
@@ -4901,6 +4901,7 @@ public class ConnectivityManager {
     @RequiresPermission(anyOf = {
             NetworkStack.PERMISSION_MAINLINE_NETWORK_STACK,
             android.Manifest.permission.NETWORK_SETTINGS,
+            android.Manifest.permission.NETWORK_SETUP_WIZARD,
             android.Manifest.permission.CONNECTIVITY_USE_RESTRICTED_NETWORKS})
     public void registerSystemDefaultNetworkCallback(@NonNull NetworkCallback networkCallback,
             @NonNull Handler handler) {
@@ -5493,9 +5494,9 @@ public class ConnectivityManager {
      * @return {@code uid} if the connection is found and the app has permission to observe it
      *     (e.g., if it is associated with the calling VPN app's VpnService tunnel) or {@link
      *     android.os.Process#INVALID_UID} if the connection is not found.
-     * @throws {@link SecurityException} if the caller is not the active VpnService for the current
+     * @throws SecurityException if the caller is not the active VpnService for the current
      *     user.
-     * @throws {@link IllegalArgumentException} if an unsupported protocol is requested.
+     * @throws IllegalArgumentException if an unsupported protocol is requested.
      */
     public int getConnectionOwnerUid(
             int protocol, @NonNull InetSocketAddress local, @NonNull InetSocketAddress remote) {
@@ -6029,6 +6030,30 @@ public class ConnectivityManager {
             @FirewallRule final int rule) {
         try {
             mService.setUidFirewallRule(chain, uid, rule);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Get firewall rule of specified firewall chain on specified uid.
+     *
+     * @param chain target chain.
+     * @param uid   target uid
+     * @return either FIREWALL_RULE_ALLOW or FIREWALL_RULE_DENY
+     * @throws UnsupportedOperationException if called on pre-T devices.
+     * @throws ServiceSpecificException in case of failure, with an error code indicating the
+     *                                  cause of the failure.
+     * @hide
+     */
+    @RequiresPermission(anyOf = {
+            android.Manifest.permission.NETWORK_SETTINGS,
+            android.Manifest.permission.NETWORK_STACK,
+            NetworkStack.PERMISSION_MAINLINE_NETWORK_STACK
+    })
+    public int getUidFirewallRule(@FirewallChain final int chain, final int uid) {
+        try {
+            return mService.getUidFirewallRule(chain, uid);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
