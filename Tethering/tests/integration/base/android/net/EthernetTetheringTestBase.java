@@ -215,6 +215,13 @@ public abstract class EthernetTetheringTestBase {
         }
     }
 
+    protected void stopEthernetTethering(final MyTetheringEventCallback callback) {
+        runAsShell(TETHER_PRIVILEGED, () -> {
+            mTm.stopTethering(TETHERING_ETHERNET);
+            maybeUnregisterTetheringEventCallback(callback);
+        });
+    }
+
     protected void cleanUp() throws Exception {
         setPreferTestNetworks(false);
 
@@ -253,6 +260,7 @@ public abstract class EthernetTetheringTestBase {
             if (mRunTests) cleanUp();
         } finally {
             mHandlerThread.quitSafely();
+            mHandlerThread.join();
             mUiAutomation.dropShellPermissionIdentity();
         }
     }

@@ -20,6 +20,7 @@ common_excludes = [
     # Exclude existing *OWNERS files
     "**/*OWNERS",
     "**/.git/**",
+    "**/.gitignore",
 ]
 
 cronet_origin_files = glob(
@@ -29,7 +30,6 @@ cronet_origin_files = glob(
         "build/buildflag.h",
         "chrome/VERSION",
         "components/cronet/**",
-        "components/grpc_suport/**",
         "components/metrics/**",
         "components/nacl/**",
         "components/prefs/**",
@@ -70,10 +70,7 @@ cronet_origin_files = glob(
         "base/third_party/icu/**",
         "base/third_party/nspr/**",
         "base/third_party/superfasthash/**",
-        # TODO: we should be able to remove this dependency.
-        "base/third_party/symbolize/**",
         "base/third_party/valgrind/**",
-        "base/third_party/xdg_user_dirs/**",
         "buildtools/third_party/libc++/**",
         "buildtools/third_party/libc++abi/**",
         # Note: Only used for tests.
@@ -100,7 +97,9 @@ cronet_origin_files = glob(
         "third_party/protobuf/**",
         # Note: Only used for tests.
         "third_party/quic_trace/**",
-        "third_party/zlib/**",
+        # Note: Cronet currently uses Android's zlib
+        # "third_party/zlib/**",
+        "url/third_party/mozilla/**",
     ],
     exclude = common_excludes,
 )
