@@ -31,6 +31,7 @@ import android.nearby.PresenceScanFilter;
 import android.nearby.ScanCallback;
 import android.nearby.ScanFilter;
 import android.nearby.ScanRequest;
+import android.nearby.aidl.IOffloadCallback;
 import android.os.IBinder;
 import android.os.RemoteException;
 import android.util.Log;
@@ -208,7 +209,6 @@ public class DiscoveryProviderManager implements AbstractDiscoveryProvider.Liste
             }
             ScanListenerRecord scanListenerRecord =
                     new ScanListenerRecord(scanRequest, listener, callerIdentity, deathRecipient);
-            mScanTypeScanListenerRecordMap.put(listenerBinder, scanListenerRecord);
 
             Boolean started = startProviders(scanRequest);
             if (started == null) {
@@ -217,6 +217,7 @@ public class DiscoveryProviderManager implements AbstractDiscoveryProvider.Liste
             if (!started) {
                 return NearbyManager.ScanStatus.ERROR;
             }
+            mScanTypeScanListenerRecordMap.put(listenerBinder, scanListenerRecord);
             NearbyMetrics.logScanStarted(scanListenerRecord.hashCode(), scanRequest);
             if (mScanMode < scanRequest.getScanMode()) {
                 mScanMode = scanRequest.getScanMode();
@@ -275,6 +276,13 @@ public class DiscoveryProviderManager implements AbstractDiscoveryProvider.Liste
                 }
             }
         }
+    }
+
+    /**
+     * Query offload capability in a device.
+     */
+    public void queryOffloadCapability(IOffloadCallback callback) {
+        mChreDiscoveryProvider.queryOffloadCapability(callback);
     }
 
     /**
