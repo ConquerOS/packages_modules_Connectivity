@@ -16,7 +16,6 @@
 
 package com.android.server.connectivity;
 
-import static android.net.NetworkAgent.CMD_START_SOCKET_KEEPALIVE;
 import static android.net.SocketKeepalive.ERROR_INVALID_SOCKET;
 import static android.net.SocketKeepalive.MIN_INTERVAL_SEC;
 import static android.net.SocketKeepalive.SUCCESS_PAUSED;
@@ -40,7 +39,6 @@ import android.net.INetd;
 import android.net.ISocketKeepaliveCallback;
 import android.net.MarkMaskParcel;
 import android.net.Network;
-import android.net.NetworkAgent;
 import android.net.SocketKeepalive.InvalidSocketException;
 import android.os.FileUtils;
 import android.os.Handler;
@@ -52,6 +50,7 @@ import android.system.ErrnoException;
 import android.system.Os;
 import android.system.OsConstants;
 import android.system.StructTimeval;
+import android.util.LocalLog;
 import android.util.Log;
 import android.util.SparseArray;
 
@@ -93,6 +92,29 @@ public class AutomaticOnOffKeepaliveTracker {
     private static final int ADJUST_TCP_POLLING_DELAY_MS = 2000;
     private static final String AUTOMATIC_ON_OFF_KEEPALIVE_VERSION =
             "automatic_on_off_keepalive_version";
+
+    // ConnectivityService parses message constants from itself and AutomaticOnOffKeepaliveTracker
+    // with MessageUtils for debugging purposes, and crashes if some messages have the same values.
+    private static final int BASE = 2000;
+    /**
+     * Sent by AutomaticOnOffKeepaliveTracker periodically (when relevant) to trigger monitor
+     * automatic keepalive request.
+     *
+     * NATT keepalives have an automatic mode where the system only sends keepalive packets when
+     * TCP sockets are open over a VPN. The system will check periodically for presence of
+     * such open sockets, and this message is what triggers the re-evaluation.
+     *
+     * obj = A Binder object associated with the keepalive.
+     */
+    public static final int CMD_MONITOR_AUTOMATIC_KEEPALIVE = BASE + 1;
+
+    /**
+     * Sent by AutomaticOnOffKeepaliveTracker to ConnectivityService to start a keepalive.
+     *
+     * obj = AutomaticKeepaliveInfo object
+     */
+    public static final int CMD_REQUEST_START_KEEPALIVE = BASE + 2;
+
     /**
      * States for {@code #AutomaticOnOffKeepalive}.
      *
@@ -152,6 +174,9 @@ public class AutomaticOnOffKeepaliveTracker {
     // TODO: Remove this when TCP polling design is replaced with callback.
     private long mTestLowTcpPollingTimerUntilMs = 0;
 
+    private static final int MAX_EVENTS_LOGS = 40;
+    private final LocalLog mEventLog = new LocalLog(MAX_EVENTS_LOGS);
+
     /**
      * Information about a managed keepalive.
      *
@@ -198,7 +223,7 @@ public class AutomaticOnOffKeepaliveTracker {
                     throw new InvalidSocketException(ERROR_INVALID_SOCKET, e);
                 }
                 mAlarmListener = () -> mConnectivityServiceHandler.obtainMessage(
-                        NetworkAgent.CMD_MONITOR_AUTOMATIC_KEEPALIVE, mCallback.asBinder())
+                        CMD_MONITOR_AUTOMATIC_KEEPALIVE, mCallback.asBinder())
                         .sendToTarget();
             } else {
                 mAutomaticOnOffState = STATE_ALWAYS_ON;
@@ -230,6 +255,7 @@ public class AutomaticOnOffKeepaliveTracker {
 
         @Override
         public void binderDied() {
+            mEventLog.log("Binder died : " + mCallback);
             mConnectivityServiceHandler.post(() -> cleanupAutoOnOffKeepalive(this));
         }
 
@@ -332,6 +358,7 @@ public class AutomaticOnOffKeepaliveTracker {
      * @param autoKi the keepalive to resume
      */
     public void handleMaybeResumeKeepalive(@NonNull AutomaticOnOffKeepalive autoKi) {
+        mEventLog.log("Resume keepalive " + autoKi.mCallback + " on " + autoKi.getNetwork());
         // Might happen if the automatic keepalive was removed by the app just as the alarm fires.
         if (!mAutomaticOnOffKeepalives.contains(autoKi)) return;
         if (STATE_ALWAYS_ON == autoKi.mAutomaticOnOffState) {
@@ -377,6 +404,7 @@ public class AutomaticOnOffKeepaliveTracker {
      * Handle stop all keepalives on the specific network.
      */
     public void handleStopAllKeepalives(NetworkAgentInfo nai, int reason) {
+        mEventLog.log("Stop all keepalives on " + nai.network + " because " + reason);
         mKeepaliveTracker.handleStopAllKeepalives(nai, reason);
         final List<AutomaticOnOffKeepalive> matches =
                 CollectionUtils.filter(mAutomaticOnOffKeepalives, it -> it.mKi.getNai() == nai);
@@ -392,6 +420,7 @@ public class AutomaticOnOffKeepaliveTracker {
      */
     public void handleStartKeepalive(Message message) {
         final AutomaticOnOffKeepalive autoKi = (AutomaticOnOffKeepalive) message.obj;
+        mEventLog.log("Start keepalive " + autoKi.mCallback + " on " + autoKi.getNetwork());
         mKeepaliveTracker.handleStartKeepalive(autoKi.mKi);
 
         // Add automatic on/off request into list to track its life cycle.
@@ -410,9 +439,11 @@ public class AutomaticOnOffKeepaliveTracker {
 
     private void handleResumeKeepalive(@NonNull final KeepaliveTracker.KeepaliveInfo ki) {
         mKeepaliveTracker.handleStartKeepalive(ki);
+        mEventLog.log("Resumed successfully keepalive " + ki.mCallback + " on " + ki.mNai);
     }
 
     private void handlePauseKeepalive(@NonNull final KeepaliveTracker.KeepaliveInfo ki) {
+        mEventLog.log("Suspend keepalive " + ki.mCallback + " on " + ki.mNai);
         // TODO : mKT.handleStopKeepalive should take a KeepaliveInfo instead
         mKeepaliveTracker.handleStopKeepalive(ki.getNai(), ki.getSlot(), SUCCESS_PAUSED);
     }
@@ -421,6 +452,7 @@ public class AutomaticOnOffKeepaliveTracker {
      * Handle stop keepalives on the specific network with given slot.
      */
     public void handleStopKeepalive(@NonNull final AutomaticOnOffKeepalive autoKi, int reason) {
+        mEventLog.log("Stop keepalive " + autoKi.mCallback + " because " + reason);
         // Stop the keepalive unless it was suspended. This includes the case where it's managed
         // but enabled, and the case where it's always on.
         if (autoKi.mAutomaticOnOffState != STATE_SUSPENDED) {
@@ -466,9 +498,13 @@ public class AutomaticOnOffKeepaliveTracker {
         try {
             final AutomaticOnOffKeepalive autoKi = new AutomaticOnOffKeepalive(ki,
                     automaticOnOffKeepalives, underpinnedNetwork);
-            mConnectivityServiceHandler.obtainMessage(NetworkAgent.CMD_START_SOCKET_KEEPALIVE,
-                    // TODO : move ConnectivityService#encodeBool to a static lib.
-                    automaticOnOffKeepalives ? 1 : 0, 0, autoKi).sendToTarget();
+            mEventLog.log("Start natt keepalive " + cb + " on " + nai.network
+                    + " " + srcAddrString + ":" + srcPort
+                    + " → " + dstAddrString + ":" + dstPort
+                    + " auto=" + autoKi
+                    + " underpinned=" + underpinnedNetwork);
+            mConnectivityServiceHandler.obtainMessage(CMD_REQUEST_START_KEEPALIVE, autoKi)
+                    .sendToTarget();
         } catch (InvalidSocketException e) {
             mKeepaliveTracker.notifyErrorCallback(cb, e.error);
         }
@@ -496,9 +532,13 @@ public class AutomaticOnOffKeepaliveTracker {
         try {
             final AutomaticOnOffKeepalive autoKi = new AutomaticOnOffKeepalive(ki,
                     automaticOnOffKeepalives, underpinnedNetwork);
-            mConnectivityServiceHandler.obtainMessage(NetworkAgent.CMD_START_SOCKET_KEEPALIVE,
-                    // TODO : move ConnectivityService#encodeBool to a static lib.
-                    automaticOnOffKeepalives ? 1 : 0, 0, autoKi).sendToTarget();
+            mEventLog.log("Start natt keepalive " + cb + " on " + nai.network
+                    + " " + srcAddrString
+                    + " → " + dstAddrString + ":" + dstPort
+                    + " auto=" + autoKi
+                    + " underpinned=" + underpinnedNetwork);
+            mConnectivityServiceHandler.obtainMessage(CMD_REQUEST_START_KEEPALIVE, autoKi)
+                    .sendToTarget();
         } catch (InvalidSocketException e) {
             mKeepaliveTracker.notifyErrorCallback(cb, e.error);
         }
@@ -526,7 +566,7 @@ public class AutomaticOnOffKeepaliveTracker {
             final AutomaticOnOffKeepalive autoKi = new AutomaticOnOffKeepalive(ki,
                     false /* autoOnOff, tcp keepalives are never auto on/off */,
                     null /* underpinnedNetwork, tcp keepalives do not refer to this */);
-            mConnectivityServiceHandler.obtainMessage(CMD_START_SOCKET_KEEPALIVE, autoKi)
+            mConnectivityServiceHandler.obtainMessage(CMD_REQUEST_START_KEEPALIVE, autoKi)
                     .sendToTarget();
         } catch (InvalidSocketException e) {
             mKeepaliveTracker.notifyErrorCallback(cb, e.error);
@@ -549,6 +589,11 @@ public class AutomaticOnOffKeepaliveTracker {
         for (AutomaticOnOffKeepalive autoKi : mAutomaticOnOffKeepalives) {
             pw.println(autoKi.toString());
         }
+        pw.decreaseIndent();
+
+        pw.println("Events (most recent first):");
+        pw.increaseIndent();
+        mEventLog.reverseDump(pw);
         pw.decreaseIndent();
     }
 
