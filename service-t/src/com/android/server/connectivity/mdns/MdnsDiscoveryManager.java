@@ -16,21 +16,20 @@
 
 package com.android.server.connectivity.mdns;
 
-import static com.android.server.connectivity.mdns.MdnsSocketProvider.isNetworkMatched;
+import static com.android.server.connectivity.mdns.util.MdnsUtils.isNetworkMatched;
 
 import android.Manifest.permission;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.RequiresPermission;
 import android.net.Network;
-import android.text.TextUtils;
 import android.util.ArrayMap;
 import android.util.Log;
 import android.util.Pair;
 
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
-import com.android.server.connectivity.mdns.util.MdnsLogger;
+import com.android.net.module.util.SharedLog;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -43,10 +42,10 @@ import java.util.List;
 public class MdnsDiscoveryManager implements MdnsSocketClientBase.Callback {
     private static final String TAG = MdnsDiscoveryManager.class.getSimpleName();
     public static final boolean DBG = Log.isLoggable(TAG, Log.DEBUG);
-    private static final MdnsLogger LOGGER = new MdnsLogger("MdnsDiscoveryManager");
 
     private final ExecutorProvider executorProvider;
     private final MdnsSocketClientBase socketClient;
+    @NonNull private final SharedLog sharedLog;
 
     @GuardedBy("this")
     @NonNull private final PerNetworkServiceTypeClients perNetworkServiceTypeClients;
@@ -82,7 +81,11 @@ public class MdnsDiscoveryManager implements MdnsSocketClientBase.Callback {
             final List<MdnsServiceTypeClient> list = new ArrayList<>();
             for (int i = 0; i < clients.size(); i++) {
                 final Pair<String, Network> perNetworkServiceType = clients.keyAt(i);
-                if (isNetworkMatched(network, perNetworkServiceType.second)) {
+                final Network serviceTypeNetwork = perNetworkServiceType.second;
+                // The serviceTypeNetwork would be null if the MdnsSocketClient is being used. This
+                // is also the case if the socket is for a tethering interface. In either of these
+                // cases, the client is expected to process any responses.
+                if (serviceTypeNetwork == null || isNetworkMatched(network, serviceTypeNetwork)) {
                     list.add(clients.valueAt(i));
                 }
             }
@@ -100,9 +103,10 @@ public class MdnsDiscoveryManager implements MdnsSocketClientBase.Callback {
     }
 
     public MdnsDiscoveryManager(@NonNull ExecutorProvider executorProvider,
-            @NonNull MdnsSocketClientBase socketClient) {
+            @NonNull MdnsSocketClientBase socketClient, @NonNull SharedLog sharedLog) {
         this.executorProvider = executorProvider;
         this.socketClient = socketClient;
+        this.sharedLog = sharedLog;
         perNetworkServiceTypeClients = new PerNetworkServiceTypeClients();
     }
 
@@ -120,31 +124,47 @@ public class MdnsDiscoveryManager implements MdnsSocketClientBase.Callback {
             @NonNull String serviceType,
             @NonNull MdnsServiceBrowserListener listener,
             @NonNull MdnsSearchOptions searchOptions) {
-        LOGGER.log(
-                "Registering listener for subtypes: %s",
-                TextUtils.join(",", searchOptions.getSubtypes()));
+        sharedLog.i("Registering listener for serviceType: " + serviceType);
         if (perNetworkServiceTypeClients.isEmpty()) {
             // First listener. Starts the socket client.
             try {
                 socketClient.startDiscovery();
             } catch (IOException e) {
-                LOGGER.e("Failed to start discover.", e);
+                sharedLog.e("Failed to start discover.", e);
                 return;
             }
         }
         // Request the network for discovery.
-        socketClient.notifyNetworkRequested(listener, searchOptions.getNetwork(), network -> {
-            synchronized (this) {
-                // All listeners of the same service types shares the same MdnsServiceTypeClient.
-                MdnsServiceTypeClient serviceTypeClient =
-                        perNetworkServiceTypeClients.get(serviceType, network);
-                if (serviceTypeClient == null) {
-                    serviceTypeClient = createServiceTypeClient(serviceType, network);
-                    perNetworkServiceTypeClients.put(serviceType, network, serviceTypeClient);
-                }
-                serviceTypeClient.startSendAndReceive(listener, searchOptions);
-            }
-        });
+        socketClient.notifyNetworkRequested(listener, searchOptions.getNetwork(),
+                new MdnsSocketClientBase.SocketCreationCallback() {
+                    @Override
+                    public void onSocketCreated(@Nullable Network network) {
+                        synchronized (MdnsDiscoveryManager.this) {
+                            // All listeners of the same service types shares the same
+                            // MdnsServiceTypeClient.
+                            MdnsServiceTypeClient serviceTypeClient =
+                                    perNetworkServiceTypeClients.get(serviceType, network);
+                            if (serviceTypeClient == null) {
+                                serviceTypeClient = createServiceTypeClient(serviceType, network);
+                                perNetworkServiceTypeClients.put(serviceType, network,
+                                        serviceTypeClient);
+                            }
+                            serviceTypeClient.startSendAndReceive(listener, searchOptions);
+                        }
+                    }
+
+                    @Override
+                    public void onAllSocketsDestroyed(@Nullable Network network) {
+                        synchronized (MdnsDiscoveryManager.this) {
+                            final MdnsServiceTypeClient serviceTypeClient =
+                                    perNetworkServiceTypeClients.get(serviceType, network);
+                            if (serviceTypeClient == null) return;
+                            // Notify all listeners that all services are removed from this socket.
+                            serviceTypeClient.notifySocketDestroyed();
+                            perNetworkServiceTypeClients.remove(serviceTypeClient);
+                        }
+                    }
+                });
     }
 
     /**
@@ -157,8 +177,7 @@ public class MdnsDiscoveryManager implements MdnsSocketClientBase.Callback {
     @RequiresPermission(permission.CHANGE_WIFI_MULTICAST_STATE)
     public synchronized void unregisterListener(
             @NonNull String serviceType, @NonNull MdnsServiceBrowserListener listener) {
-        LOGGER.log("Unregistering listener for service type: %s", serviceType);
-        if (DBG) Log.d(TAG, "Unregistering listener for serviceType:" + serviceType);
+        sharedLog.i("Unregistering listener for serviceType:" + serviceType);
         final List<MdnsServiceTypeClient> serviceTypeClients =
                 perNetworkServiceTypeClients.getByServiceType(serviceType);
         if (serviceTypeClients.isEmpty()) {
@@ -170,11 +189,11 @@ public class MdnsDiscoveryManager implements MdnsSocketClientBase.Callback {
                 // No listener is registered for the service type anymore, remove it from the list
                 // of the service type clients.
                 perNetworkServiceTypeClients.remove(serviceTypeClient);
-                if (perNetworkServiceTypeClients.isEmpty()) {
-                    // No discovery request. Stops the socket client.
-                    socketClient.stopDiscovery();
-                }
             }
+        }
+        if (perNetworkServiceTypeClients.isEmpty()) {
+            // No discovery request. Stops the socket client.
+            socketClient.stopDiscovery();
         }
         // Unrequested the network.
         socketClient.notifyNetworkUnrequested(listener);
@@ -201,8 +220,10 @@ public class MdnsDiscoveryManager implements MdnsSocketClientBase.Callback {
     @VisibleForTesting
     MdnsServiceTypeClient createServiceTypeClient(@NonNull String serviceType,
             @Nullable Network network) {
+        sharedLog.log("createServiceTypeClient for type:" + serviceType + ", net:" + network);
         return new MdnsServiceTypeClient(
                 serviceType, socketClient,
-                executorProvider.newServiceTypeClientSchedulerExecutor(), network);
+                executorProvider.newServiceTypeClientSchedulerExecutor(), network,
+                sharedLog.forSubComponent(serviceType + "-" + network));
     }
 }

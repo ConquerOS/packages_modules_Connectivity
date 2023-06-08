@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 The Android Open Source Project
+ * Copyright (C) 2023 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package com.android.server.nearby.provider;
+package com.android.server.nearby.managers;
 
 import static android.nearby.ScanRequest.SCAN_TYPE_NEARBY_PRESENCE;
 
@@ -41,6 +41,11 @@ import com.android.internal.annotations.VisibleForTesting;
 import com.android.server.nearby.injector.Injector;
 import com.android.server.nearby.metrics.NearbyMetrics;
 import com.android.server.nearby.presence.PresenceDiscoveryResult;
+import com.android.server.nearby.provider.AbstractDiscoveryProvider;
+import com.android.server.nearby.provider.BleDiscoveryProvider;
+import com.android.server.nearby.provider.ChreCommunication;
+import com.android.server.nearby.provider.ChreDiscoveryProvider;
+import com.android.server.nearby.provider.PrivacyFilter;
 import com.android.server.nearby.util.identity.CallerIdentity;
 import com.android.server.nearby.util.permissions.DiscoveryPermissions;
 
@@ -54,19 +59,81 @@ import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 /** Manages all aspects of discovery providers. */
-public class DiscoveryProviderManager implements AbstractDiscoveryProvider.Listener {
+public class DiscoveryProviderManagerLegacy implements AbstractDiscoveryProvider.Listener,
+        DiscoveryManager {
 
     protected final Object mLock = new Object();
-    private final Context mContext;
-    private final BleDiscoveryProvider mBleDiscoveryProvider;
     @VisibleForTesting
     @Nullable
     final ChreDiscoveryProvider mChreDiscoveryProvider;
-    private @ScanRequest.ScanMode int mScanMode;
+    private final Context mContext;
+    private final BleDiscoveryProvider mBleDiscoveryProvider;
     private final Injector mInjector;
-
+    @ScanRequest.ScanMode
+    private int mScanMode;
     @GuardedBy("mLock")
-    private Map<IBinder, ScanListenerRecord> mScanTypeScanListenerRecordMap;
+    private final Map<IBinder, ScanListenerRecord> mScanTypeScanListenerRecordMap;
+
+    public DiscoveryProviderManagerLegacy(Context context, Injector injector) {
+        mContext = context;
+        mBleDiscoveryProvider = new BleDiscoveryProvider(mContext, injector);
+        Executor executor = Executors.newSingleThreadExecutor();
+        mChreDiscoveryProvider =
+                new ChreDiscoveryProvider(
+                        mContext, new ChreCommunication(injector, mContext, executor), executor);
+        mScanTypeScanListenerRecordMap = new HashMap<>();
+        mInjector = injector;
+        Log.v(TAG, "DiscoveryProviderManagerLegacy: ");
+    }
+
+    @VisibleForTesting
+    DiscoveryProviderManagerLegacy(Context context, Injector injector,
+            BleDiscoveryProvider bleDiscoveryProvider,
+            ChreDiscoveryProvider chreDiscoveryProvider,
+            Map<IBinder, ScanListenerRecord> scanTypeScanListenerRecordMap) {
+        mContext = context;
+        mInjector = injector;
+        mBleDiscoveryProvider = bleDiscoveryProvider;
+        mChreDiscoveryProvider = chreDiscoveryProvider;
+        mScanTypeScanListenerRecordMap = scanTypeScanListenerRecordMap;
+    }
+
+    private static boolean isChreOnly(List<ScanFilter> scanFilters) {
+        for (ScanFilter scanFilter : scanFilters) {
+            List<DataElement> dataElements =
+                    ((PresenceScanFilter) scanFilter).getExtendedProperties();
+            for (DataElement dataElement : dataElements) {
+                if (dataElement.getKey() != DataElement.DataType.SCAN_MODE) {
+                    continue;
+                }
+                byte[] scanModeValue = dataElement.getValue();
+                if (scanModeValue == null || scanModeValue.length == 0) {
+                    break;
+                }
+                if (Byte.toUnsignedInt(scanModeValue[0]) == ScanRequest.SCAN_MODE_CHRE_ONLY) {
+                    return true;
+                }
+            }
+
+        }
+        return false;
+    }
+
+    @VisibleForTesting
+    static boolean presenceFilterMatches(
+            NearbyDeviceParcelable device, List<ScanFilter> scanFilters) {
+        if (scanFilters.isEmpty()) {
+            return true;
+        }
+        PresenceDiscoveryResult discoveryResult = PresenceDiscoveryResult.fromDevice(device);
+        for (ScanFilter scanFilter : scanFilters) {
+            PresenceScanFilter presenceScanFilter = (PresenceScanFilter) scanFilter;
+            if (discoveryResult.matches(presenceScanFilter)) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     @Override
     public void onNearbyDeviceDiscovered(NearbyDeviceParcelable nearbyDevice) {
@@ -149,29 +216,6 @@ public class DiscoveryProviderManager implements AbstractDiscoveryProvider.Liste
                 }
             }
         }
-    }
-
-    public DiscoveryProviderManager(Context context, Injector injector) {
-        mContext = context;
-        mBleDiscoveryProvider = new BleDiscoveryProvider(mContext, injector);
-        Executor executor = Executors.newSingleThreadExecutor();
-        mChreDiscoveryProvider =
-                new ChreDiscoveryProvider(
-                        mContext, new ChreCommunication(injector, mContext, executor), executor);
-        mScanTypeScanListenerRecordMap = new HashMap<>();
-        mInjector = injector;
-    }
-
-    @VisibleForTesting
-    DiscoveryProviderManager(Context context, Injector injector,
-            BleDiscoveryProvider bleDiscoveryProvider,
-            ChreDiscoveryProvider chreDiscoveryProvider,
-            Map<IBinder, ScanListenerRecord> scanTypeScanListenerRecordMap) {
-        mContext = context;
-        mInjector = injector;
-        mBleDiscoveryProvider = bleDiscoveryProvider;
-        mChreDiscoveryProvider = chreDiscoveryProvider;
-        mScanTypeScanListenerRecordMap = scanTypeScanListenerRecordMap;
     }
 
     /** Called after boot completed. */
@@ -329,27 +373,6 @@ public class DiscoveryProviderManager implements AbstractDiscoveryProvider.Liste
         return true;
     }
 
-    private static boolean isChreOnly(List<ScanFilter> scanFilters) {
-        for (ScanFilter scanFilter : scanFilters) {
-            List<DataElement> dataElements =
-                    ((PresenceScanFilter) scanFilter).getExtendedProperties();
-            for (DataElement dataElement : dataElements) {
-                if (dataElement.getKey() != DataElement.DataType.SCAN_MODE) {
-                    continue;
-                }
-                byte[] scanModeValue = dataElement.getValue();
-                if (scanModeValue == null || scanModeValue.length == 0) {
-                    break;
-                }
-                if (Byte.toUnsignedInt(scanModeValue[0]) == ScanRequest.SCAN_MODE_CHRE_ONLY) {
-                    return true;
-                }
-            }
-
-        }
-        return false;
-    }
-
     private void startBleProvider(List<ScanFilter> scanFilters) {
         if (!mBleDiscoveryProvider.getController().isStarted()) {
             Log.d(TAG, "DiscoveryProviderManager starts Ble scanning.");
@@ -412,36 +435,6 @@ public class DiscoveryProviderManager implements AbstractDiscoveryProvider.Liste
     }
 
     @VisibleForTesting
-    static boolean presenceFilterMatches(
-            NearbyDeviceParcelable device, List<ScanFilter> scanFilters) {
-        if (scanFilters.isEmpty()) {
-            return true;
-        }
-        PresenceDiscoveryResult discoveryResult = PresenceDiscoveryResult.fromDevice(device);
-        for (ScanFilter scanFilter : scanFilters) {
-            PresenceScanFilter presenceScanFilter = (PresenceScanFilter) scanFilter;
-            if (discoveryResult.matches(presenceScanFilter)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    class ScanListenerDeathRecipient implements IBinder.DeathRecipient {
-        public IScanListener listener;
-
-        ScanListenerDeathRecipient(IScanListener listener) {
-            this.listener = listener;
-        }
-
-        @Override
-        public void binderDied() {
-            Log.d(TAG, "Binder is dead - unregistering scan listener");
-            unregisterScanListener(listener);
-        }
-    }
-
-    @VisibleForTesting
     static class ScanListenerRecord {
 
         private final ScanRequest mScanRequest;
@@ -472,7 +465,7 @@ public class DiscoveryProviderManager implements AbstractDiscoveryProvider.Liste
             return mCallerIdentity;
         }
 
-        ScanListenerDeathRecipient getDeathRecipient()  {
+        ScanListenerDeathRecipient getDeathRecipient() {
             return mDeathRecipient;
         }
 
@@ -489,6 +482,23 @@ public class DiscoveryProviderManager implements AbstractDiscoveryProvider.Liste
         @Override
         public int hashCode() {
             return Objects.hash(mScanListener, mScanRequest);
+        }
+    }
+
+    /**
+     * Class to make listener unregister after the binder is dead.
+     */
+    public class ScanListenerDeathRecipient implements IBinder.DeathRecipient {
+        public IScanListener listener;
+
+        ScanListenerDeathRecipient(IScanListener listener) {
+            this.listener = listener;
+        }
+
+        @Override
+        public void binderDied() {
+            Log.d(TAG, "Binder is dead - unregistering scan listener");
+            unregisterScanListener(listener);
         }
     }
 }

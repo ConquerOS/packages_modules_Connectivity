@@ -177,6 +177,7 @@ public class AutomaticOnOffKeepaliveTracker {
     private static final int MAX_EVENTS_LOGS = 40;
     private final LocalLog mEventLog = new LocalLog(MAX_EVENTS_LOGS);
 
+    private final KeepaliveStatsTracker mKeepaliveStatsTracker = new KeepaliveStatsTracker();
     /**
      * Information about a managed keepalive.
      *
@@ -421,6 +422,7 @@ public class AutomaticOnOffKeepaliveTracker {
     public void handleStartKeepalive(Message message) {
         final AutomaticOnOffKeepalive autoKi = (AutomaticOnOffKeepalive) message.obj;
         mEventLog.log("Start keepalive " + autoKi.mCallback + " on " + autoKi.getNetwork());
+        mKeepaliveStatsTracker.onStartKeepalive();
         mKeepaliveTracker.handleStartKeepalive(autoKi.mKi);
 
         // Add automatic on/off request into list to track its life cycle.
@@ -438,12 +440,14 @@ public class AutomaticOnOffKeepaliveTracker {
     }
 
     private void handleResumeKeepalive(@NonNull final KeepaliveTracker.KeepaliveInfo ki) {
+        mKeepaliveStatsTracker.onResumeKeepalive();
         mKeepaliveTracker.handleStartKeepalive(ki);
         mEventLog.log("Resumed successfully keepalive " + ki.mCallback + " on " + ki.mNai);
     }
 
     private void handlePauseKeepalive(@NonNull final KeepaliveTracker.KeepaliveInfo ki) {
         mEventLog.log("Suspend keepalive " + ki.mCallback + " on " + ki.mNai);
+        mKeepaliveStatsTracker.onPauseKeepalive();
         // TODO : mKT.handleStopKeepalive should take a KeepaliveInfo instead
         mKeepaliveTracker.handleStopKeepalive(ki.getNai(), ki.getSlot(), SUCCESS_PAUSED);
     }
@@ -467,6 +471,7 @@ public class AutomaticOnOffKeepaliveTracker {
 
     private void cleanupAutoOnOffKeepalive(@NonNull final AutomaticOnOffKeepalive autoKi) {
         ensureRunningOnHandlerThread();
+        mKeepaliveStatsTracker.onStopKeepalive(autoKi.mAutomaticOnOffState != STATE_SUSPENDED);
         autoKi.close();
         if (null != autoKi.mAlarmListener) mAlarmManager.cancel(autoKi.mAlarmListener);
 
@@ -578,12 +583,8 @@ public class AutomaticOnOffKeepaliveTracker {
      */
     public void dump(IndentingPrintWriter pw) {
         mKeepaliveTracker.dump(pw);
-        // Reading DeviceConfig will check if the calling uid and calling package name are the same.
-        // Clear calling identity to align the calling uid and package so that it won't fail if cts
-        // would like to do the dump()
-        final boolean featureEnabled = BinderUtils.withCleanCallingIdentity(
-                () -> mDependencies.isFeatureEnabled(AUTOMATIC_ON_OFF_KEEPALIVE_VERSION,
-                        true /* defaultEnabled */));
+        final boolean featureEnabled = mDependencies.isFeatureEnabled(
+                AUTOMATIC_ON_OFF_KEEPALIVE_VERSION, true /* defaultEnabled */);
         pw.println("AutomaticOnOff enabled: " + featureEnabled);
         pw.increaseIndent();
         for (AutomaticOnOffKeepalive autoKi : mAutomaticOnOffKeepalives) {
@@ -836,8 +837,12 @@ public class AutomaticOnOffKeepaliveTracker {
          * @return whether the feature is enabled
          */
         public boolean isFeatureEnabled(@NonNull final String name, final boolean defaultEnabled) {
-            return DeviceConfigUtils.isFeatureEnabled(mContext, NAMESPACE_TETHERING, name,
-                    defaultEnabled);
+            // Reading DeviceConfig will check if the calling uid and calling package name are the
+            // same. Clear calling identity to align the calling uid and package so that it won't
+            // fail if cts would like to do the dump()
+            return BinderUtils.withCleanCallingIdentity(() ->
+                    DeviceConfigUtils.isFeatureEnabled(mContext, NAMESPACE_TETHERING, name,
+                    DeviceConfigUtils.TETHERING_MODULE_NAME, defaultEnabled));
         }
 
         /**

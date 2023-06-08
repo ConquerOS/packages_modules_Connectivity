@@ -83,7 +83,6 @@ import android.content.pm.PackageManager;
 import android.content.res.Resources;
 import android.database.ContentObserver;
 import android.net.ConnectivityManager;
-import android.net.ConnectivityResources;
 import android.net.DataUsageRequest;
 import android.net.INetd;
 import android.net.INetworkStatsService;
@@ -175,6 +174,7 @@ import com.android.networkstack.apishim.BroadcastOptionsShimImpl;
 import com.android.networkstack.apishim.ConstantsShim;
 import com.android.networkstack.apishim.common.UnsupportedApiLevelException;
 import com.android.server.BpfNetMaps;
+import com.android.server.connectivity.ConnectivityResources;
 
 import java.io.File;
 import java.io.FileDescriptor;
@@ -946,7 +946,11 @@ public class NetworkStatsService extends INetworkStatsService.Stub {
     @GuardedBy("mStatsLock")
     private void shutdownLocked() {
         final TetheringManager tetheringManager = mContext.getSystemService(TetheringManager.class);
-        tetheringManager.unregisterTetheringEventCallback(mTetherListener);
+        try {
+            tetheringManager.unregisterTetheringEventCallback(mTetherListener);
+        } catch (IllegalStateException e) {
+            Log.i(TAG, "shutdownLocked: error when unregister tethering, ignored. e=" + e);
+        }
         mContext.unregisterReceiver(mPollReceiver);
         mContext.unregisterReceiver(mRemovedReceiver);
         mContext.unregisterReceiver(mUserReceiver);

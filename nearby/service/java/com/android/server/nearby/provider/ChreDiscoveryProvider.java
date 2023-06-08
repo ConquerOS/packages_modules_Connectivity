@@ -44,6 +44,7 @@ import com.android.server.nearby.NearbyConfiguration;
 
 import com.google.protobuf.ByteString;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Executor;
@@ -162,7 +163,7 @@ public class ChreDiscoveryProvider extends AbstractDiscoveryProvider {
     }
 
     @VisibleForTesting
-    List<ScanFilter> getFiltersLocked() {
+    public List<ScanFilter> getFiltersLocked() {
         synchronized (mLock) {
             return mScanFilters == null ? null : List.copyOf(mScanFilters);
         }
@@ -362,6 +363,7 @@ public class ChreDiscoveryProvider extends AbstractDiscoveryProvider {
 
                         NearbyDeviceParcelable device =
                                 new NearbyDeviceParcelable.Builder()
+                                        .setDeviceId(Arrays.hashCode(secretId))
                                         .setScanType(SCAN_TYPE_NEARBY_PRESENCE)
                                         .setMedium(NearbyDevice.Medium.BLE)
                                         .setTxPower(filterResult.getTxPower())
