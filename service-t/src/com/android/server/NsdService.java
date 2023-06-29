@@ -73,7 +73,6 @@ import com.android.server.connectivity.mdns.MdnsMultinetworkSocketClient;
 import com.android.server.connectivity.mdns.MdnsSearchOptions;
 import com.android.server.connectivity.mdns.MdnsServiceBrowserListener;
 import com.android.server.connectivity.mdns.MdnsServiceInfo;
-import com.android.server.connectivity.mdns.MdnsSocketClientBase;
 import com.android.server.connectivity.mdns.MdnsSocketProvider;
 import com.android.server.connectivity.mdns.util.MdnsUtils;
 
@@ -620,6 +619,7 @@ public class NsdService extends INsdManager.Stub {
                             final MdnsSearchOptions.Builder optionsBuilder =
                                     MdnsSearchOptions.newBuilder()
                                             .setNetwork(info.getNetwork())
+                                            .setRemoveExpiredService(true)
                                             .setIsPassiveMode(true);
                             if (typeAndSubtype.second != null) {
                                 // The parsing ensures subtype starts with an underscore.
@@ -814,6 +814,7 @@ public class NsdService extends INsdManager.Stub {
                                     .setNetwork(info.getNetwork())
                                     .setIsPassiveMode(true)
                                     .setResolveInstanceName(info.getServiceName())
+                                    .setRemoveExpiredService(true)
                                     .build();
                             mMdnsDiscoveryManager.registerListener(
                                     resolveServiceType, listener, options);
@@ -907,6 +908,7 @@ public class NsdService extends INsdManager.Stub {
                                 .setNetwork(info.getNetwork())
                                 .setIsPassiveMode(true)
                                 .setResolveInstanceName(info.getServiceName())
+                                .setRemoveExpiredService(true)
                                 .build();
                         mMdnsDiscoveryManager.registerListener(
                                 resolveServiceType, listener, options);
@@ -1452,7 +1454,7 @@ public class NsdService extends INsdManager.Stub {
          */
         public MdnsDiscoveryManager makeMdnsDiscoveryManager(
                 @NonNull ExecutorProvider executorProvider,
-                @NonNull MdnsSocketClientBase socketClient, @NonNull SharedLog sharedLog) {
+                @NonNull MdnsMultinetworkSocketClient socketClient, @NonNull SharedLog sharedLog) {
             return new MdnsDiscoveryManager(executorProvider, socketClient, sharedLog);
         }
 
